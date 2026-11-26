@@ -12,7 +12,7 @@
       "published_at": "2026-10-21T21:05:43.950213Z",
       "rust_version": "1.85",
       "source": "https://crates.io/api/v1/crates/tokio",
-      "checked_at": "2026-11-26T20:22:28.835231+00:00",
+      "checked_at": "2026-11-26T21:26:31.111841+00:00",
       "requirement": "1.54.1"
     },
     {
@@ -26,7 +26,7 @@
       "published_at": "2026-10-09T11:02:11.456952Z",
       "rust_version": "1.85",
       "source": "https://crates.io/api/v1/crates/tokio-util",
-      "checked_at": "2026-11-26T20:22:28.956163+00:00",
+      "checked_at": "2026-11-26T21:26:30.911526+00:00",
       "requirement": "0.7.20"
     },
     {
@@ -40,7 +40,7 @@
       "published_at": "2026-11-17T20:58:59.774443Z",
       "rust_version": "1.57",
       "source": "https://crates.io/api/v1/crates/bytes",
-      "checked_at": "2026-11-26T20:22:15.250005+00:00",
+      "checked_at": "2026-11-26T21:25:50.386052+00:00",
       "requirement": "1.12.2"
     },
     {
@@ -54,7 +54,7 @@
       "published_at": "2026-11-24T21:40:58.329957Z",
       "rust_version": "1.63",
       "source": "https://crates.io/api/v1/crates/h2",
-      "checked_at": "2026-11-26T20:22:18.649503+00:00",
+      "checked_at": "2026-11-26T21:25:53.376157+00:00",
       "requirement": "0.4.21"
     },
     {
@@ -68,7 +68,7 @@
       "published_at": "2026-07-29T14:57:21.755258Z",
       "rust_version": "1.57.0",
       "source": "https://crates.io/api/v1/crates/http",
-      "checked_at": "2026-11-26T20:22:19.818142+00:00",
+      "checked_at": "2026-11-26T21:25:54.307220+00:00",
       "requirement": "1.5.0"
     },
     {
@@ -82,7 +82,7 @@
       "published_at": "2026-08-11T12:13:28.064590Z",
       "rust_version": "1.71",
       "source": "https://crates.io/api/v1/crates/futures",
-      "checked_at": "2026-11-26T20:22:17.673074+00:00",
+      "checked_at": "2026-11-26T21:25:52.349763+00:00",
       "requirement": "0.3.34"
     },
     {
@@ -96,7 +96,7 @@
       "published_at": "2026-08-08T07:10:35.376083Z",
       "rust_version": "1.71",
       "source": "https://crates.io/api/v1/crates/async-trait",
-      "checked_at": "2026-11-26T20:22:13.990629+00:00",
+      "checked_at": "2026-11-26T21:25:48.284025+00:00",
       "requirement": "0.1.92"
     },
     {
@@ -110,7 +110,7 @@
       "published_at": "2026-09-23T20:24:07.771104Z",
       "rust_version": "1.77",
       "source": "https://crates.io/api/v1/crates/thiserror",
-      "checked_at": "2026-11-26T20:22:27.970335+00:00",
+      "checked_at": "2026-11-26T21:26:20.142037+00:00",
       "requirement": "2.0.21"
     },
     {
@@ -124,7 +124,7 @@
       "published_at": "2026-11-23T06:21:21.769182Z",
       "rust_version": "1.68",
       "source": "https://crates.io/api/v1/crates/anyhow",
-      "checked_at": "2026-11-26T20:22:14.101054+00:00",
+      "checked_at": "2026-11-26T21:25:48.724693+00:00",
       "requirement": "1.0.105"
     },
     {
@@ -138,7 +138,7 @@
       "published_at": "2026-07-18T23:05:13.266456Z",
       "rust_version": "1.56",
       "source": "https://crates.io/api/v1/crates/serde",
-      "checked_at": "2026-11-26T20:22:26.162808+00:00",
+      "checked_at": "2026-11-26T21:26:12.336618+00:00",
       "requirement": "1.0.229"
     },
     {
@@ -152,7 +152,7 @@
       "published_at": "2026-10-11T15:31:46.076577Z",
       "rust_version": "1.71",
       "source": "https://crates.io/api/v1/crates/serde_json",
-      "checked_at": "2026-11-26T20:22:26.263701+00:00",
+      "checked_at": "2026-11-26T21:26:13.892166+00:00",
       "requirement": "1.0.154"
     },
     {
@@ -166,7 +166,7 @@
       "published_at": "2025-12-18T14:26:12.360139Z",
       "rust_version": "1.65.0",
       "source": "https://crates.io/api/v1/crates/tracing",
-      "checked_at": "2026-11-26T20:22:29.722503+00:00",
+      "checked_at": "2026-11-26T21:26:36.260440+00:00",
       "requirement": "0.1.44"
     },
     {
@@ -180,7 +180,7 @@
       "published_at": "2026-03-13T10:04:15.571048Z",
       "rust_version": "1.65.0",
       "source": "https://crates.io/api/v1/crates/tracing-subscriber",
-      "checked_at": "2026-11-26T20:22:29.998912+00:00",
+      "checked_at": "2026-11-26T21:26:40.627067+00:00",
       "requirement": "0.3.23"
     },
     {
@@ -194,7 +194,7 @@
       "published_at": "2026-11-17T01:19:44.774559Z",
       "rust_version": "1.89.0",
       "source": "https://crates.io/api/v1/crates/uuid",
-      "checked_at": "2026-11-26T20:22:30.939614+00:00",
+      "checked_at": "2026-11-26T21:26:42.360823+00:00",
       "requirement": "1.29.3"
     },
     {
@@ -208,7 +208,7 @@
       "published_at": "2026-10-14T09:54:15.075873Z",
       "rust_version": "1.71",
       "source": "https://crates.io/api/v1/crates/rustls",
-      "checked_at": "2026-11-26T20:22:25.915917+00:00",
+      "checked_at": "2026-11-26T21:26:03.331201+00:00",
       "requirement": "0.23.46"
     },
     {
@@ -222,7 +222,7 @@
       "published_at": "2026-09-28T09:18:10.392472Z",
       "rust_version": "1.71",
       "source": "https://crates.io/api/v1/crates/tokio-rustls",
-      "checked_at": "2026-11-26T20:22:28.408346+00:00",
+      "checked_at": "2026-11-26T21:26:26.817351+00:00",
       "requirement": "0.26.6"
     },
     {
@@ -236,7 +236,7 @@
       "published_at": "2026-11-10T21:08:56.515281Z",
       "rust_version": "1.71",
       "source": "https://crates.io/api/v1/crates/webpki-roots",
-      "checked_at": "2026-11-26T20:22:31.698118+00:00",
+      "checked_at": "2026-11-26T21:26:43.736148+00:00",
       "requirement": "1.0.12"
     },
     {
@@ -250,7 +250,7 @@
       "published_at": "2026-11-10T17:38:32.491976Z",
       "rust_version": "1.60",
       "source": "https://crates.io/api/v1/crates/rustls-pki-types",
-      "checked_at": "2026-11-26T20:22:25.403015+00:00",
+      "checked_at": "2026-11-26T21:26:06.870183+00:00",
       "requirement": "1.16.0"
     },
     {
@@ -264,7 +264,7 @@
       "published_at": "2026-08-28T21:30:01.600392Z",
       "rust_version": "1.88",
       "source": "https://crates.io/api/v1/crates/rcgen",
-      "checked_at": "2026-11-26T20:22:23.961801+00:00",
+      "checked_at": "2026-11-26T21:26:01.463738+00:00",
       "requirement": "0.14.10"
     },
     {
@@ -278,7 +278,7 @@
       "published_at": "2026-11-24T21:41:19.477913Z",
       "rust_version": "1.85",
       "source": "https://crates.io/api/v1/crates/clap",
-      "checked_at": "2026-11-26T20:22:17.461719+00:00",
+      "checked_at": "2026-11-26T21:25:52.188184+00:00",
       "requirement": "4.6.10"
     },
     {
@@ -292,7 +292,7 @@
       "published_at": "2026-11-15T13:54:26.803018Z",
       "rust_version": "1.85",
       "source": "https://crates.io/api/v1/crates/rand",
-      "checked_at": "2026-11-26T20:22:23.562555+00:00",
+      "checked_at": "2026-11-26T21:26:01.559593+00:00",
       "requirement": "0.10.4"
     },
     {
@@ -306,7 +306,7 @@
       "published_at": "2025-03-03T14:44:09.975762Z",
       "rust_version": null,
       "source": "https://crates.io/api/v1/crates/httparse",
-      "checked_at": "2026-11-26T20:22:20.264232+00:00",
+      "checked_at": "2026-11-26T21:25:54.499282+00:00",
       "requirement": "1.10.1"
     },
     {
@@ -320,7 +320,7 @@
       "published_at": "2026-07-13T19:45:58.436336Z",
       "rust_version": "1.70",
       "source": "https://crates.io/api/v1/crates/socket2",
-      "checked_at": "2026-11-26T20:22:27.784538+00:00",
+      "checked_at": "2026-11-26T21:26:17.817724+00:00",
       "requirement": "0.6.5"
     },
     {
@@ -334,7 +334,7 @@
       "published_at": "2026-11-25T15:26:54.368320Z",
       "rust_version": "1.88",
       "source": "https://crates.io/api/v1/crates/sha2",
-      "checked_at": "2026-11-26T20:22:26.887452+00:00",
+      "checked_at": "2026-11-26T21:26:12.917031+00:00",
       "requirement": "0.11.2"
     },
     {
@@ -343,13 +343,13 @@
       "alias": "blake3",
       "crate": "blake3",
       "previous_requirement": "1.8",
-      "latest_stable": "1.8.7",
+      "latest_stable": "1.8.8",
       "yanked": false,
-      "published_at": "2026-08-20T09:09:56.903547Z",
+      "published_at": "2026-11-26T21:01:42.814118Z",
       "rust_version": null,
       "source": "https://crates.io/api/v1/crates/blake3",
-      "checked_at": "2026-11-26T20:22:15.043769+00:00",
-      "requirement": "1.8.7"
+      "checked_at": "2026-11-26T21:25:51.373622+00:00",
+      "requirement": "1.8.8"
     },
     {
       "manifest": "Cargo.toml",
@@ -362,7 +362,7 @@
       "published_at": "2026-10-31T22:07:26.669701Z",
       "rust_version": "1.87",
       "source": "https://crates.io/api/v1/crates/ml-kem",
-      "checked_at": "2026-11-26T20:22:21.636805+00:00",
+      "checked_at": "2026-11-26T21:25:56.363740+00:00",
       "requirement": "=0.3.4"
     },
     {
@@ -376,7 +376,7 @@
       "published_at": "2021-03-03T10:48:58.682837Z",
       "rust_version": null,
       "source": "https://crates.io/api/v1/crates/hex",
-      "checked_at": "2026-11-26T20:22:18.858124+00:00",
+      "checked_at": "2026-11-26T21:25:52.717648+00:00",
       "requirement": "0.4.3"
     },
     {
@@ -390,7 +390,7 @@
       "published_at": "2026-08-21T20:55:46.824964Z",
       "rust_version": "1.85",
       "source": "https://crates.io/api/v1/crates/aes-gcm",
-      "checked_at": "2026-11-26T20:22:13.779933+00:00",
+      "checked_at": "2026-11-26T21:25:48.809391+00:00",
       "requirement": "0.11.1"
     },
     {
@@ -404,7 +404,7 @@
       "published_at": "2026-06-28T17:41:38.459924Z",
       "rust_version": "1.85",
       "source": "https://crates.io/api/v1/crates/chacha20poly1305",
-      "checked_at": "2026-11-26T20:22:17.005325+00:00",
+      "checked_at": "2026-11-26T21:25:50.300268+00:00",
       "requirement": "0.11.0"
     },
     {
@@ -418,7 +418,7 @@
       "published_at": "2026-07-06T16:23:00.505143Z",
       "rust_version": "1.85",
       "source": "https://crates.io/api/v1/crates/x25519-dalek",
-      "checked_at": "2026-11-26T20:22:31.259575+00:00",
+      "checked_at": "2026-11-26T21:26:45.779147+00:00",
       "requirement": "3.0.0"
     },
     {
@@ -432,7 +432,7 @@
       "published_at": "2026-03-30T14:36:50.965552Z",
       "rust_version": "1.85",
       "source": "https://crates.io/api/v1/crates/hkdf",
-      "checked_at": "2026-11-26T20:22:19.470191+00:00",
+      "checked_at": "2026-11-26T21:25:54.274365+00:00",
       "requirement": "0.13.0"
     },
     {
@@ -446,7 +446,7 @@
       "published_at": "2026-07-11T12:58:44.438987Z",
       "rust_version": "1.85",
       "source": "https://crates.io/api/v1/crates/tokio-tungstenite",
-      "checked_at": "2026-11-26T20:22:28.673774+00:00",
+      "checked_at": "2026-11-26T21:26:26.547460+00:00",
       "requirement": "0.30.0"
     },
     {
@@ -460,7 +460,7 @@
       "published_at": "2026-03-27T14:59:39.677170Z",
       "rust_version": "1.85",
       "source": "https://crates.io/api/v1/crates/md-5",
-      "checked_at": "2026-11-26T20:22:21.093301+00:00",
+      "checked_at": "2026-11-26T21:25:55.468342+00:00",
       "requirement": "0.11.0"
     },
     {
@@ -474,7 +474,7 @@
       "published_at": "2026-11-18T02:53:15.314583Z",
       "rust_version": "1.65",
       "source": "https://crates.io/api/v1/crates/regex",
-      "checked_at": "2026-11-26T20:22:24.549013+00:00",
+      "checked_at": "2026-11-26T21:26:03.273252+00:00",
       "requirement": "1.13.2"
     },
     {
@@ -488,7 +488,7 @@
       "published_at": "2026-03-27T14:07:50.054737Z",
       "rust_version": "1.85",
       "source": "https://crates.io/api/v1/crates/sha1",
-      "checked_at": "2026-11-26T20:22:26.773011+00:00",
+      "checked_at": "2026-11-26T21:26:06.937419+00:00",
       "requirement": "0.11.0",
       "replaces": "sha-1"
     },
@@ -503,7 +503,7 @@
       "published_at": "2026-08-04T12:34:31.976297Z",
       "rust_version": "1.71.0",
       "source": "https://crates.io/api/v1/crates/base64",
-      "checked_at": "2026-11-26T20:22:14.743279+00:00",
+      "checked_at": "2026-11-26T21:25:49.417471+00:00",
       "requirement": "0.23.1"
     },
     {
@@ -517,7 +517,7 @@
       "published_at": "2026-01-03T10:29:06.529758Z",
       "rust_version": null,
       "source": "https://crates.io/api/v1/crates/network-interface",
-      "checked_at": "2026-11-26T20:22:21.670408+00:00",
+      "checked_at": "2026-11-26T21:25:57.178551+00:00",
       "requirement": "2.0.5"
     },
     {
@@ -531,7 +531,7 @@
       "published_at": "2026-09-06T05:45:08.121491Z",
       "rust_version": null,
       "source": "https://crates.io/api/v1/crates/ipnet",
-      "checked_at": "2026-11-26T20:22:20.889262+00:00",
+      "checked_at": "2026-11-26T21:25:55.559213+00:00",
       "requirement": "2.12.2"
     },
     {
@@ -545,7 +545,7 @@
       "published_at": "2026-11-25T08:49:47.332278Z",
       "rust_version": "1.60.0",
       "source": "https://crates.io/api/v1/crates/ahash",
-      "checked_at": "2026-11-26T20:22:14.069402+00:00",
+      "checked_at": "2026-11-26T21:25:48.899580+00:00",
       "requirement": "0.8.14"
     },
     {
@@ -559,7 +559,7 @@
       "published_at": "2026-11-23T20:07:30.406021Z",
       "rust_version": "1.83.0",
       "source": "https://crates.io/api/v1/crates/etherparse",
-      "checked_at": "2026-11-26T20:22:16.459269+00:00",
+      "checked_at": "2026-11-26T21:25:51.197998+00:00",
       "requirement": "0.21.1"
     },
     {
@@ -573,7 +573,7 @@
       "published_at": "2026-10-30T21:36:19.748360Z",
       "rust_version": "1.71.0",
       "source": "https://crates.io/api/v1/crates/log",
-      "checked_at": "2026-11-26T20:22:20.964060+00:00",
+      "checked_at": "2026-11-26T21:25:56.319493+00:00",
       "requirement": "0.4.35"
     },
     {
@@ -587,7 +587,7 @@
       "published_at": "2026-11-03T00:42:38.995976Z",
       "rust_version": null,
       "source": "https://crates.io/api/v1/crates/pingora-pool",
-      "checked_at": "2026-11-26T20:22:22.198270+00:00",
+      "checked_at": "2026-11-26T21:25:57.049981+00:00",
       "requirement": "0.9.1"
     },
     {
@@ -601,7 +601,7 @@
       "published_at": "2026-11-03T00:43:37.391167Z",
       "rust_version": null,
       "source": "https://crates.io/api/v1/crates/pingora-http",
-      "checked_at": "2026-11-26T20:22:21.660518+00:00",
+      "checked_at": "2026-11-26T21:25:57.668233+00:00",
       "requirement": "0.9.1"
     },
     {
@@ -615,7 +615,7 @@
       "published_at": "2026-11-03T00:19:43.450231Z",
       "rust_version": null,
       "source": "https://crates.io/api/v1/crates/pingora-timeout",
-      "checked_at": "2026-11-26T20:22:22.252367+00:00",
+      "checked_at": "2026-11-26T21:25:58.603542+00:00",
       "requirement": "0.9.1"
     },
     {
@@ -629,7 +629,7 @@
       "published_at": "2026-11-24T15:39:00.259212Z",
       "rust_version": "1.88",
       "source": "https://crates.io/api/v1/crates/hickory-resolver",
-      "checked_at": "2026-11-26T20:22:19.941812+00:00",
+      "checked_at": "2026-11-26T21:25:54.386514+00:00",
       "requirement": "0.26.4"
     },
     {
@@ -643,7 +643,7 @@
       "published_at": "2026-11-24T15:38:41.575834Z",
       "rust_version": "1.88",
       "source": "https://crates.io/api/v1/crates/hickory-proto",
-      "checked_at": "2026-11-26T20:22:19.828371+00:00",
+      "checked_at": "2026-11-26T21:25:53.550985+00:00",
       "requirement": "0.26.4"
     },
     {
@@ -657,7 +657,7 @@
       "published_at": "2026-11-03T00:44:09.614684Z",
       "rust_version": null,
       "source": "https://crates.io/api/v1/crates/pingora-core",
-      "checked_at": "2026-11-26T20:22:21.562280+00:00",
+      "checked_at": "2026-11-26T21:25:56.233421+00:00",
       "requirement": "0.9.1"
     },
     {
@@ -671,7 +671,7 @@
       "published_at": "2026-11-03T00:44:34.896169Z",
       "rust_version": null,
       "source": "https://crates.io/api/v1/crates/pingora-load-balancing",
-      "checked_at": "2026-11-26T20:22:22.123893+00:00",
+      "checked_at": "2026-11-26T21:25:57.175230+00:00",
       "requirement": "0.9.1"
     },
     {
@@ -685,7 +685,7 @@
       "published_at": "2026-11-18T08:11:31.620839Z",
       "rust_version": null,
       "source": "https://crates.io/api/v1/crates/tun",
-      "checked_at": "2026-11-26T20:22:29.894903+00:00",
+      "checked_at": "2026-11-26T21:26:40.724383+00:00",
       "requirement": "0.8.15"
     },
     {
@@ -699,7 +699,7 @@
       "published_at": "2026-11-22T14:05:23.203306Z",
       "rust_version": null,
       "source": "https://crates.io/api/v1/crates/xray-rs-window",
-      "checked_at": "2026-11-26T20:22:31.872352+00:00",
+      "checked_at": "2026-11-26T21:26:46.751797+00:00",
       "requirement": "0.1.0"
     },
     {
@@ -713,7 +713,7 @@
       "published_at": "2026-10-05T06:30:14.304985Z",
       "rust_version": null,
       "source": "https://crates.io/api/v1/crates/wintun-rs",
-      "checked_at": "2026-11-26T20:22:30.358582+00:00",
+      "checked_at": "2026-11-26T21:26:42.817695+00:00",
       "requirement": "0.0.6"
     },
     {
@@ -727,7 +727,7 @@
       "published_at": "2025-10-06T19:19:49.704461Z",
       "rust_version": "1.82",
       "source": "https://crates.io/api/v1/crates/windows",
-      "checked_at": "2026-11-26T20:22:32.780171+00:00",
+      "checked_at": "2026-11-26T21:28:04.891290+00:00",
       "requirement": "0.62.2"
     },
     {
@@ -741,7 +741,7 @@
       "published_at": "2026-07-30T23:14:52.497403Z",
       "rust_version": "1.83.0",
       "source": "https://crates.io/api/v1/crates/dioxus",
-      "checked_at": "2026-11-26T20:22:17.622650+00:00",
+      "checked_at": "2026-11-26T21:25:51.416474+00:00",
       "requirement": "0.7.10"
     },
     {
@@ -755,7 +755,7 @@
       "published_at": "2026-09-08T20:55:26.479356Z",
       "rust_version": "1.85.0",
       "source": "https://crates.io/api/v1/crates/reqwest",
-      "checked_at": "2026-11-26T20:22:24.572569+00:00",
+      "checked_at": "2026-11-26T21:26:02.875143+00:00",
       "requirement": "0.13.5"
     },
     {
@@ -769,7 +769,7 @@
       "published_at": "2026-07-18T23:05:13.266456Z",
       "rust_version": "1.56",
       "source": "https://crates.io/api/v1/crates/serde",
-      "checked_at": "2026-11-26T20:22:26.162808+00:00",
+      "checked_at": "2026-11-26T21:26:12.336618+00:00",
       "requirement": "1.0.229"
     },
     {
@@ -783,7 +783,7 @@
       "published_at": "2026-10-11T15:31:46.076577Z",
       "rust_version": "1.71",
       "source": "https://crates.io/api/v1/crates/serde_json",
-      "checked_at": "2026-11-26T20:22:26.263701+00:00",
+      "checked_at": "2026-11-26T21:26:13.892166+00:00",
       "requirement": "1.0.154"
     },
     {
@@ -797,7 +797,7 @@
       "published_at": "2026-10-21T21:05:43.950213Z",
       "rust_version": "1.85",
       "source": "https://crates.io/api/v1/crates/tokio",
-      "checked_at": "2026-11-26T20:22:28.835231+00:00",
+      "checked_at": "2026-11-26T21:26:31.111841+00:00",
       "requirement": "1.54.1"
     },
     {
@@ -812,7 +812,7 @@
       "published_at": "2026-05-01T22:53:45.364117Z",
       "rust_version": null,
       "source": "https://crates.io/api/v1/crates/boringtun",
-      "checked_at": "2026-11-26T20:22:15.310669+00:00"
+      "checked_at": "2026-11-26T21:25:50.141077+00:00"
     },
     {
       "manifest": "Cargo.toml",
@@ -826,7 +826,7 @@
       "published_at": "2026-08-17T01:47:21.367822Z",
       "rust_version": "1.91",
       "source": "https://crates.io/api/v1/crates/smoltcp",
-      "checked_at": "2026-11-26T20:22:27.178644+00:00"
+      "checked_at": "2026-11-26T21:26:16.812784+00:00"
     },
     {
       "manifest": "Cargo.toml",
@@ -840,7 +840,7 @@
       "published_at": "2026-09-14T10:08:47.662258Z",
       "rust_version": "1.85",
       "source": "https://crates.io/api/v1/crates/quinn",
-      "checked_at": "2026-11-26T20:22:23.009684+00:00"
+      "checked_at": "2026-11-26T21:26:01.632523+00:00"
     },
     {
       "manifest": "Cargo.toml",
@@ -854,7 +854,7 @@
       "published_at": "2025-05-06T15:37:32.883527Z",
       "rust_version": "1.70",
       "source": "https://crates.io/api/v1/crates/h3",
-      "checked_at": "2026-11-26T20:22:18.227474+00:00"
+      "checked_at": "2026-11-26T21:25:53.314019+00:00"
     },
     {
       "manifest": "Cargo.toml",
@@ -868,7 +868,7 @@
       "published_at": "2025-05-06T20:35:46.241359Z",
       "rust_version": "1.70",
       "source": "https://crates.io/api/v1/crates/h3-quinn",
-      "checked_at": "2026-11-26T20:22:18.299674+00:00"
+      "checked_at": "2026-11-26T21:25:52.757544+00:00"
     },
     {
       "manifest": "Cargo.toml",
@@ -882,7 +882,7 @@
       "published_at": "2025-03-11T19:42:03.889273Z",
       "rust_version": "1.66.0",
       "source": "https://crates.io/api/v1/crates/ring",
-      "checked_at": "2026-11-26T20:22:24.898062+00:00"
+      "checked_at": "2026-11-26T21:26:03.107717+00:00"
     },
     {
       "manifest": "Cargo.toml",
@@ -896,7 +896,7 @@
       "published_at": "2026-02-05T09:30:31.546618Z",
       "rust_version": "1.67.1",
       "source": "https://crates.io/api/v1/crates/x509-parser",
-      "checked_at": "2026-11-26T20:22:32.686395+00:00"
+      "checked_at": "2026-11-26T21:26:46.972157+00:00"
     },
     {
       "manifest": "Cargo.toml",
@@ -910,7 +910,7 @@
       "published_at": "2024-05-26T19:57:45.710414Z",
       "rust_version": "1.64",
       "source": "https://crates.io/api/v1/crates/serde_yaml_ng",
-      "checked_at": "2026-11-26T20:22:25.796919+00:00"
+      "checked_at": "2026-11-26T21:26:03.851998+00:00"
     },
     {
       "manifest": "Cargo.toml",
@@ -924,7 +924,7 @@
       "published_at": "2026-11-25T01:44:12.122385Z",
       "rust_version": "1.85",
       "source": "https://crates.io/api/v1/crates/toml",
-      "checked_at": "2026-11-26T20:22:29.916485+00:00"
+      "checked_at": "2026-11-26T21:26:39.778736+00:00"
     },
     {
       "manifest": "Cargo.toml",
@@ -938,7 +938,7 @@
       "published_at": "2026-11-12T17:42:17.010527Z",
       "rust_version": "1.85",
       "source": "https://crates.io/api/v1/crates/prost",
-      "checked_at": "2026-11-26T20:22:22.481290+00:00"
+      "checked_at": "2026-11-26T21:26:00.448039+00:00"
     },
     {
       "manifest": "Cargo.toml",
@@ -952,7 +952,7 @@
       "published_at": "2026-07-09T22:11:04.717484Z",
       "rust_version": "1.82.0",
       "source": "https://crates.io/api/v1/crates/prost-reflect",
-      "checked_at": "2026-11-26T20:22:23.130438+00:00"
+      "checked_at": "2026-11-26T21:26:00.499663+00:00"
     },
     {
       "manifest": "Cargo.toml",
@@ -966,7 +966,7 @@
       "published_at": "2023-11-03T06:07:26.854567Z",
       "rust_version": null,
       "source": "https://crates.io/api/v1/crates/json_comments",
-      "checked_at": "2026-11-26T20:22:20.825127+00:00"
+      "checked_at": "2026-11-26T21:25:54.886067+00:00"
     },
     {
       "manifest": "Cargo.toml",
@@ -980,7 +980,7 @@
       "published_at": "2026-05-15T17:16:58.539249Z",
       "rust_version": "1.85",
       "source": "https://crates.io/api/v1/crates/shake",
-      "checked_at": "2026-11-26T20:22:27.232199+00:00"
+      "checked_at": "2026-11-26T21:26:13.209963+00:00"
     },
     {
       "manifest": "Cargo.toml",
@@ -994,7 +994,7 @@
       "published_at": "2026-09-30T09:13:59.040527Z",
       "rust_version": "1.85",
       "source": "https://crates.io/api/v1/crates/quinn-proto",
-      "checked_at": "2026-11-26T20:22:23.112128+00:00"
+      "checked_at": "2026-11-26T21:26:01.151241+00:00"
     },
     {
       "manifest": "Cargo.toml",
@@ -1008,7 +1008,7 @@
       "published_at": "2021-07-17T16:59:25.917332Z",
       "rust_version": null,
       "source": "https://crates.io/api/v1/crates/go-parse-duration",
-      "checked_at": "2026-11-26T20:22:18.390141+00:00"
+      "checked_at": "2026-11-26T21:25:52.030223+00:00"
     },
     {
       "manifest": "Cargo.toml",
@@ -1022,7 +1022,7 @@
       "published_at": "2026-08-26T18:13:19.682516Z",
       "rust_version": "1.85",
       "source": "https://crates.io/api/v1/crates/shadowsocks-crypto",
-      "checked_at": "2026-11-26T20:48:07.531Z"
+      "checked_at": "2026-11-26T21:26:14.313575+00:00"
     },
     {
       "manifest": "Cargo.toml",
@@ -1035,7 +1035,7 @@
       "published_at": "2026-08-26T18:31:08.872950Z",
       "rust_version": "1.91",
       "source": "https://crates.io/api/v1/crates/shadowsocks",
-      "checked_at": "2026-11-26T21:20:44.600Z",
+      "checked_at": "2026-11-26T21:26:12.207732+00:00",
       "requirement": "=1.25.0"
     }
   ],

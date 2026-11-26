@@ -1,6 +1,6 @@
 # Dependency upgrade audit
 
-Official crates.io API audit reconfirmed all 72 direct entries (69 unique registry packages) from 2026-11-26T20:22:13.779933+00:00 through 2026-11-26T20:22:32.780171+00:00 (UTC). Every result was non-yanked stable; no versions changed in the final recheck.
+Official crates.io API recheck covers all 74 direct entries (71 unique registry packages), from 2026-11-26T21:25:48.284025+00:00 through 2026-11-26T21:28:04.891290+00:00 (UTC). All selections are non-yanked stable. BLAKE3 advanced from 1.8.7 to 1.8.8 since the prior audit; the reviewed classic Shadowsocks engine is 1.25.0.
 
 Maximum semantic version with no prerelease component and yanked=false; official crates.io API; all direct, target, dev and build dependency sections in both manifests.
 
@@ -32,7 +32,7 @@ The table records registry evidence, not a build-success claim. Linux resolver a
 | `Cargo.toml` / `dependencies` | `httparse` (`httparse`) | `1.9` | `1.10.1` / `1.10.1` | 2025-03-03T14:44:09.975762Z | [crates.io API](https://crates.io/api/v1/crates/httparse) |
 | `Cargo.toml` / `dependencies` | `socket2` (`socket2`) | `0.5` | `0.6.5` / `0.6.5` | 2026-07-13T19:45:58.436336Z | [crates.io API](https://crates.io/api/v1/crates/socket2) |
 | `Cargo.toml` / `dependencies` | `sha2` (`sha2`) | `0.10` | `0.11.2` / `0.11.2` | 2026-11-25T15:26:54.368320Z | [crates.io API](https://crates.io/api/v1/crates/sha2) |
-| `Cargo.toml` / `dependencies` | `blake3` (`blake3`) | `1.8` | `1.8.7` / `1.8.7` | 2026-08-20T09:09:56.903547Z | [crates.io API](https://crates.io/api/v1/crates/blake3) |
+| `Cargo.toml` / `dependencies` | `blake3` (`blake3`) | `1.8` | `1.8.8` / `1.8.8` | 2026-11-26T21:01:42.814118Z | [crates.io API](https://crates.io/api/v1/crates/blake3) |
 | `Cargo.toml` / `dependencies` | `ml-kem` (`ml-kem`) | `=0.3.2` | `0.3.4` / `=0.3.4` | 2026-10-31T22:07:26.669701Z | [crates.io API](https://crates.io/api/v1/crates/ml-kem) |
 | `Cargo.toml` / `dependencies` | `hex` (`hex`) | `0.4` | `0.4.3` / `0.4.3` | 2021-03-03T10:48:58.682837Z | [crates.io API](https://crates.io/api/v1/crates/hex) |
 | `Cargo.toml` / `dependencies` | `aes-gcm` (`aes-gcm`) | `0.10` | `0.11.1` / `0.11.1` | 2026-08-21T20:55:46.824964Z | [crates.io API](https://crates.io/api/v1/crates/aes-gcm) |
@@ -42,7 +42,7 @@ The table records registry evidence, not a build-success claim. Linux resolver a
 | `Cargo.toml` / `dependencies` | `tokio-tungstenite` (`tokio-tungstenite`) | `0.24` | `0.30.0` / `0.30.0` | 2026-07-11T12:58:44.438987Z | [crates.io API](https://crates.io/api/v1/crates/tokio-tungstenite) |
 | `Cargo.toml` / `dependencies` | `md-5` (`md-5`) | `0.10` | `0.11.0` / `0.11.0` | 2026-03-27T14:59:39.677170Z | [crates.io API](https://crates.io/api/v1/crates/md-5) |
 | `Cargo.toml` / `dependencies` | `regex` (`regex`) | `1.10` | `1.13.2` / `1.13.2` | 2026-11-18T02:53:15.314583Z | [crates.io API](https://crates.io/api/v1/crates/regex) |
-| `Cargo.toml` / `dependencies` | `sha1` (replaces `sha-1`) | `0.10` | `0.11.0` / `0.11.0` | 2026-03-27T14:07:50.054737Z | [crates.io API](https://crates.io/api/v1/crates/sha1) |
+| `Cargo.toml` / `dependencies` | `sha1` (`sha1`) | `0.10` | `0.11.0` / `0.11.0` | 2026-03-27T14:07:50.054737Z | [crates.io API](https://crates.io/api/v1/crates/sha1) |
 | `Cargo.toml` / `dependencies` | `base64` (`base64`) | `0.22` | `0.23.1` / `0.23.1` | 2026-08-04T12:34:31.976297Z | [crates.io API](https://crates.io/api/v1/crates/base64) |
 | `Cargo.toml` / `dependencies` | `network-interface` (`network-interface`) | `2` | `2.0.5` / `2.0.5` | 2026-01-03T10:29:06.529758Z | [crates.io API](https://crates.io/api/v1/crates/network-interface) |
 | `Cargo.toml` / `dependencies` | `ipnet` (`ipnet`) | `2` | `2.12.2` / `2.12.2` | 2026-09-06T05:45:08.121491Z | [crates.io API](https://crates.io/api/v1/crates/ipnet) |
@@ -65,23 +65,23 @@ The table records registry evidence, not a build-success claim. Linux resolver a
 | `debug_panel/dioxus_app/Cargo.toml` / `dependencies` | `serde` (`serde`) | `1.0` | `1.0.229` / `1.0.229` | 2026-07-18T23:05:13.266456Z | [crates.io API](https://crates.io/api/v1/crates/serde) |
 | `debug_panel/dioxus_app/Cargo.toml` / `dependencies` | `serde_json` (`serde_json`) | `1.0` | `1.0.154` / `1.0.154` | 2026-10-11T15:31:46.076577Z | [crates.io API](https://crates.io/api/v1/crates/serde_json) |
 | `debug_panel/dioxus_app/Cargo.toml` / `dependencies` | `tokio` (`tokio`) | `1.40` | `1.54.1` / `1.54.1` | 2026-10-21T21:05:43.950213Z | [crates.io API](https://crates.io/api/v1/crates/tokio) |
-| `Cargo.toml` / `dependencies` | `boringtun` (`boringtun`) | New dependency | `0.7.1` / `0.7.1` | 2026-05-01T22:53:45.364117Z | [crates.io API](https://crates.io/api/v1/crates/boringtun) |
-| `Cargo.toml` / `dependencies` | `smoltcp` (`smoltcp`) | New dependency | `0.14.0` / `0.14.0` | 2026-08-17T01:47:21.367822Z | [crates.io API](https://crates.io/api/v1/crates/smoltcp) |
-| `Cargo.toml` / `dependencies` | `quinn` (`quinn`) | New dependency | `0.11.12` / `0.11.12` | 2026-09-14T10:08:47.662258Z | [crates.io API](https://crates.io/api/v1/crates/quinn) |
-| `Cargo.toml` / `dependencies` | `h3` (`h3`) | New dependency | `0.0.8` / `0.0.8` | 2025-05-06T15:37:32.883527Z | [crates.io API](https://crates.io/api/v1/crates/h3) |
-| `Cargo.toml` / `dependencies` | `h3-quinn` (`h3-quinn`) | New dependency | `0.0.10` / `0.0.10` | 2025-05-06T20:35:46.241359Z | [crates.io API](https://crates.io/api/v1/crates/h3-quinn) |
-| `Cargo.toml` / `dependencies` | `ring` (`ring`) | New dependency | `0.17.14` / `0.17.14` | 2025-03-11T19:42:03.889273Z | [crates.io API](https://crates.io/api/v1/crates/ring) |
-| `Cargo.toml` / `dependencies` | `x509-parser` (`x509-parser`) | New dependency | `0.18.1` / `0.18.1` | 2026-02-05T09:30:31.546618Z | [crates.io API](https://crates.io/api/v1/crates/x509-parser) |
-| `Cargo.toml` / `dependencies` | `serde_yaml_ng` (`serde_yaml_ng`) | New dependency | `0.10.0` / `0.10.0` | 2024-05-26T19:57:45.710414Z | [crates.io API](https://crates.io/api/v1/crates/serde_yaml_ng) |
-| `Cargo.toml` / `dependencies` | `toml` (`toml`) | New dependency | `1.2.3+spec-1.1.0` / `1.2.3` | 2026-11-25T01:44:12.122385Z | [crates.io API](https://crates.io/api/v1/crates/toml) |
-| `Cargo.toml` / `dependencies` | `prost` (`prost`) | New dependency | `0.14.6` / `0.14.6` | 2026-11-12T17:42:17.010527Z | [crates.io API](https://crates.io/api/v1/crates/prost) |
-| `Cargo.toml` / `dependencies` | `prost-reflect` (`prost-reflect`) | New dependency | `0.16.5` / `0.16.5` | 2026-07-09T22:11:04.717484Z | [crates.io API](https://crates.io/api/v1/crates/prost-reflect) |
-| `Cargo.toml` / `dependencies` | `json_comments` (`json_comments`) | New dependency | `0.2.2` / `0.2.2` | 2023-11-03T06:07:26.854567Z | [crates.io API](https://crates.io/api/v1/crates/json_comments) |
-| `Cargo.toml` / `dependencies` | `shake` (`shake`) | New dependency | `0.1.0` / `0.1.0` | 2026-05-15T17:16:58.539249Z | [crates.io API](https://crates.io/api/v1/crates/shake) |
-| `Cargo.toml` / `dependencies` | `quinn-proto` (`quinn-proto`) | New dependency | `0.11.19` / `0.11.19` | 2026-09-30T09:13:59.040527Z | [crates.io API](https://crates.io/api/v1/crates/quinn-proto) |
-| `Cargo.toml` / `dependencies` | `go-parse-duration` (`go-parse-duration`) | New dependency | `0.1.1` / `0.1.1` | 2021-07-17T16:59:25.917332Z | [crates.io API](https://crates.io/api/v1/crates/go-parse-duration) |
-
-| `Cargo.toml` / `dependencies` | `shadowsocks` (`shadowsocks`) | New dependency | `1.25.0` / `=1.25.0` | 2026-08-26T18:31:08.872950Z | [crates.io API](https://crates.io/api/v1/crates/shadowsocks) |
+| `Cargo.toml` / `dependencies` | `boringtun` (`boringtun`) | `new (protocol/config/REALITY integration)` | `0.7.1` / `0.7.1` | 2026-05-01T22:53:45.364117Z | [crates.io API](https://crates.io/api/v1/crates/boringtun) |
+| `Cargo.toml` / `dependencies` | `smoltcp` (`smoltcp`) | `new (protocol/config/REALITY integration)` | `0.14.0` / `0.14.0` | 2026-08-17T01:47:21.367822Z | [crates.io API](https://crates.io/api/v1/crates/smoltcp) |
+| `Cargo.toml` / `dependencies` | `quinn` (`quinn`) | `new (protocol/config/REALITY integration)` | `0.11.12` / `0.11.12` | 2026-09-14T10:08:47.662258Z | [crates.io API](https://crates.io/api/v1/crates/quinn) |
+| `Cargo.toml` / `dependencies` | `h3` (`h3`) | `new (protocol/config/REALITY integration)` | `0.0.8` / `0.0.8` | 2025-05-06T15:37:32.883527Z | [crates.io API](https://crates.io/api/v1/crates/h3) |
+| `Cargo.toml` / `dependencies` | `h3-quinn` (`h3-quinn`) | `new (protocol/config/REALITY integration)` | `0.0.10` / `0.0.10` | 2025-05-06T20:35:46.241359Z | [crates.io API](https://crates.io/api/v1/crates/h3-quinn) |
+| `Cargo.toml` / `dependencies` | `ring` (`ring`) | `new (protocol/config/REALITY integration)` | `0.17.14` / `0.17.14` | 2025-03-11T19:42:03.889273Z | [crates.io API](https://crates.io/api/v1/crates/ring) |
+| `Cargo.toml` / `dependencies` | `x509-parser` (`x509-parser`) | `new (protocol/config/REALITY integration)` | `0.18.1` / `0.18.1` | 2026-02-05T09:30:31.546618Z | [crates.io API](https://crates.io/api/v1/crates/x509-parser) |
+| `Cargo.toml` / `dependencies` | `serde_yaml_ng` (`serde_yaml_ng`) | `new (protocol/config/REALITY integration)` | `0.10.0` / `0.10.0` | 2024-05-26T19:57:45.710414Z | [crates.io API](https://crates.io/api/v1/crates/serde_yaml_ng) |
+| `Cargo.toml` / `dependencies` | `toml` (`toml`) | `new (protocol/config/REALITY integration)` | `1.2.3+spec-1.1.0` / `1.2.3` | 2026-11-25T01:44:12.122385Z | [crates.io API](https://crates.io/api/v1/crates/toml) |
+| `Cargo.toml` / `dependencies` | `prost` (`prost`) | `new (protocol/config/REALITY integration)` | `0.14.6` / `0.14.6` | 2026-11-12T17:42:17.010527Z | [crates.io API](https://crates.io/api/v1/crates/prost) |
+| `Cargo.toml` / `dependencies` | `prost-reflect` (`prost-reflect`) | `new (protocol/config/REALITY integration)` | `0.16.5` / `0.16.5` | 2026-07-09T22:11:04.717484Z | [crates.io API](https://crates.io/api/v1/crates/prost-reflect) |
+| `Cargo.toml` / `dependencies` | `json_comments` (`json_comments`) | `new (protocol/config/REALITY integration)` | `0.2.2` / `0.2.2` | 2023-11-03T06:07:26.854567Z | [crates.io API](https://crates.io/api/v1/crates/json_comments) |
+| `Cargo.toml` / `dependencies` | `shake` (`shake`) | `new (VMess/Hysteria integration)` | `0.1.0` / `0.1.0` | 2026-05-15T17:16:58.539249Z | [crates.io API](https://crates.io/api/v1/crates/shake) |
+| `Cargo.toml` / `dependencies` | `quinn-proto` (`quinn-proto`) | `new (VMess/Hysteria integration)` | `0.11.19` / `0.11.19` | 2026-09-30T09:13:59.040527Z | [crates.io API](https://crates.io/api/v1/crates/quinn-proto) |
+| `Cargo.toml` / `dependencies` | `go-parse-duration` (`go-parse-duration`) | `new (configuration integration)` | `0.1.1` / `0.1.1` | 2021-07-17T16:59:25.917332Z | [crates.io API](https://crates.io/api/v1/crates/go-parse-duration) |
+| `Cargo.toml` / `dependencies` | `shadowsocks-crypto` (`shadowsocks-crypto`) | `new (SS2022 engine integration)` | `0.8.0` / `0.8.0` | 2026-08-26T18:13:19.682516Z | [crates.io API](https://crates.io/api/v1/crates/shadowsocks-crypto) |
+| `Cargo.toml` / `dependencies` | `shadowsocks` (`shadowsocks`) | `New dependency` | `1.25.0` / `=1.25.0` | 2026-08-26T18:31:08.872950Z | [crates.io API](https://crates.io/api/v1/crates/shadowsocks) |
 
 ## Migration and Linux validation
 
@@ -137,3 +137,7 @@ Ubuntu parity-preparation run `45893018658` at `1ea1cf2` resolved the new root l
 Official registry metadata checked 2026-11-26T21:20:44.600Z selects non-yanked stable shadowsocks 1.25.0, requiring Rust 1.91. The reviewed tagged manifest enables `aead-cipher-extra` and `security-replay-attack-detect` with default features disabled; the direct shadowsocks-crypto v2 selection remains unchanged. This reuses upstream classic AEAD/KDF and replay engines for all four pinned-Go classic methods. Source: https://github.com/shadowsocks/shadowsocks-rust/blob/v1.25.0/crates/shadowsocks/Cargo.toml .
 
 The current manifest census is 74 direct entries / 71 unique registry packages; the earlier 72-entry resolver and desktop results above remain historical. The SS2022 crypto engine was subsequently added before this classic engine. This classic addition awaits Linux lock resolution and integrated runtime tests; registry evidence is not compiler or interoperability evidence.
+
+Conservative root lock resolution succeeded on Linux in run `45897529501`, source `ebd0da6564ef7d418d616feb019921d819b3ade8` on `port/classic-engine-lock`. The downloaded root manifest exactly matched the reviewed local manifest; lock SHA-256 is `e675edcb75dbc9fbd81a3eba0da39c3b82080dc182479f177290908780aeefa7`. No existing locked package was removed or upgraded; the engine and its new transitive packages were added. The approved rustls Git revision remains exact. The broader root/desktop resolver audit is separately pending in `45897791439`; compilation and runtime parity of the classic adapter remain unvalidated.
+
+The first expanded-graph audit `45897791439` failed because `cargo update` selected newly published BLAKE3 1.8.8 while the recorded registry audit still required 1.8.7; desktop checking was skipped. All 71 official package records were rechecked, with BLAKE3 the only changed selection. The manifest and complete 74-entry audit now request 1.8.8. This is an evidence/requirement correction, not a weakened resolver check; a new Linux audit and lock are required.
