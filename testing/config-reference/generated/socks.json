@@ -1,0 +1,1 @@
+{"inbounds":[{"tag":"in","listen":"127.0.0.1","port":1080,"protocol":"socks","settings":{"auth":"password","accounts":[{"user":"alice","pass":"secret"}],"udp":true,"userLevel":1}}],"outbounds":[{"tag":"out","protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port":1081,"users":[{"user":"bob","pass":"password","level":1}]}]}}]}

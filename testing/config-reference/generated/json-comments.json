@@ -1,0 +1,3 @@
+# Python comment
+{ /* block */ "stats": {}, // Java comment
+ "outbounds": [{"tag":"direct","protocol":"freedom"}]}
