@@ -1,6 +1,9 @@
 use crate::app::dns::fakedns::FakeDnsHolder;
+use crate::common::common::ERR_NO_CLUE;
 use crate::common::errors::{Error, Result};
 use crate::common::net::Network;
+use crate::common::protocol::protocol::err_proto_need_more_data;
+use crate::common::protocol::{quic, tls};
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -20,6 +23,8 @@ impl SniffResult {
         }
     }
 }
+
+type ProtocolSniffer = fn(&[u8]) -> Result<SniffResult>;
 
 pub struct Sniffer {
     fakedns: Option<Arc<FakeDnsHolder>>,
@@ -52,48 +57,62 @@ impl Sniffer {
         }
     }
     pub fn sniff(&self, payload: &[u8], network: Network) -> Result<SniffResult> {
-        if network == Network::Tcp && payload.len() >= 5 && payload[0] == 0x16 && payload[1] == 0x03
-            && let Some(domain) = Self::sniff_tls_sni(payload)
-        { return Ok(SniffResult { protocol: "tls".into(), domain }); }
-        if network == Network::Tcp && payload.len() >= 10 && let Some(domain) = Self::sniff_http_host(payload) {
+        let sniffers: &[ProtocolSniffer] = match network {
+            Network::Tcp => &[Self::sniff_http, Self::sniff_tls, Self::sniff_bittorrent],
+            Network::Udp => &[Self::sniff_quic, Self::sniff_bittorrent],
+        };
+        // This Sniffer is shared by connections: candidates stay per call.
+        sniff_content(payload, sniffers)
+    }
+    fn sniff_http(payload: &[u8]) -> Result<SniffResult> {
+        if let Some(domain) = Self::sniff_http_host(payload) {
             return Ok(SniffResult { protocol: "http".into(), domain });
         }
-        if network == Network::Udp && payload.len() >= 12 && let Some(domain) = Self::sniff_quic_sni(payload) {
-            return Ok(SniffResult { protocol: "quic".into(), domain });
+        // Preserve existing HTTP extraction (including PATCH/TRACE), while
+        // retaining Go beginWithHTTPMethod's incomplete-method/header outcome.
+        for method in [b"get".as_slice(), b"post", b"head", b"put", b"delete", b"options", b"connect", b"patch", b"trace"] {
+            if payload.len() < method.len() || payload[..method.len()].eq_ignore_ascii_case(method) {
+                return Err(no_clue());
+            }
         }
-        if let Ok(protocol) = crate::common::protocol::bittorrent::BittorrentSniffer::sniff(payload) {
-            return Ok(SniffResult { protocol, domain: String::new() });
+        Err(Error::Protocol("not an HTTP method".into()))
+    }
+    fn sniff_tls(payload: &[u8]) -> Result<SniffResult> {
+        match tls::sniff::sniff_tls(payload) {
+            Ok(header) => Ok(SniffResult { protocol: header.protocol().into(), domain: header.domain }),
+            // Common parsers currently expose Protocol(String), not typed Go
+            // sentinels. Translate only failures Go classifies as ErrNoClue.
+            Err(Error::Protocol(message)) if matches!(message.as_str(),
+                "TLS payload too short" | "incomplete TLS record" |
+                "client hello too short" | "invalid session id len" |
+                "no cipher suite len" | "no compression method len" |
+                "invalid compression method len"
+            ) => Err(no_clue()),
+            Err(error) => Err(error),
         }
-        Err(Error::Protocol("unknown content".into()))
+    }
+    fn sniff_quic(payload: &[u8]) -> Result<SniffResult> {
+        match quic::sniff::sniff_quic(payload) {
+            Ok(header) => Ok(SniffResult { protocol: header.protocol().into(), domain: header.domain }),
+            Err(_) if payload.is_empty() => Err(no_clue()),
+            Err(Error::Protocol(message)) if message == "truncated quic data" && incomplete_quic_packet(payload) => {
+                Err(no_clue())
+            }
+            Err(error) => Err(error),
+        }
+    }
+    fn sniff_bittorrent(payload: &[u8]) -> Result<SniffResult> {
+        if payload.len() < 20 { return Err(no_clue()); }
+        // Keep the port's existing BitTorrent/uTP recognition on both networks.
+        crate::common::protocol::bittorrent::BittorrentSniffer::sniff(payload)
+            .map(|protocol| SniffResult { protocol, domain: String::new() })
     }
     pub fn sniff_tls_sni(payload: &[u8]) -> Option<String> {
-        let u16_be = |i: usize| u16::from_be_bytes([payload[i], payload[i + 1]]) as usize;
-        if payload.len() < 43 || payload[5] != 0x01 { return None; }
-        let mut pos = 43;
-        if pos >= payload.len() { return None; }
-        pos += 1 + payload[pos] as usize;
-        if pos + 2 > payload.len() { return None; }
-        pos += 2 + u16_be(pos);
-        if pos + 1 > payload.len() { return None; }
-        pos += 1 + payload[pos] as usize;
-        if pos + 2 > payload.len() { return None; }
-        let end_ext = (pos + 2 + u16_be(pos)).min(payload.len());
-        pos += 2;
-        while pos + 4 <= end_ext {
-            let (ext_type, ext_len) = (u16_be(pos), u16_be(pos + 2));
-            pos += 4;
-            if ext_type == 0x0000 && pos + 5 <= end_ext && payload[pos + 2] == 0 {
-                let nlen = u16_be(pos + 3);
-                if pos + 5 + nlen <= end_ext {
-                    return std::str::from_utf8(&payload[pos + 5..pos + 5 + nlen]).ok().map(str::to_string);
-                }
-            }
-            pos += ext_len;
-        }
-        None
+        tls::sniff::sniff_tls(payload).ok().map(|header| header.domain)
     }
     pub fn is_incomplete_tls_client_hello(payload: &[u8]) -> bool {
-        if payload.len() < 5 || payload[0] != 0x16 || payload[1] != 0x03 { return false; }
+        if payload.first() != Some(&0x16) || payload.get(1).is_some_and(|major| *major != 3) { return false; }
+        if payload.len() < 5 { return true; }
         let record_len = u16::from_be_bytes([payload[3], payload[4]]) as usize;
         payload.len() < 5 + record_len
     }
@@ -105,7 +124,7 @@ impl Sniffer {
         let header_end = payload.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(payload.len());
         let text = std::str::from_utf8(&payload[..header_end]).ok()?;
         for line in text.lines().skip(1) {
-            if line.len() >= 5 && line[..5].eq_ignore_ascii_case("host:") {
+            if line.as_bytes().get(..5).is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"host:")) {
                 let host = line[5..].trim();
                 let domain = if let Some(rest) = host.strip_prefix('[') {
                     rest.split(']').next()?.trim()
@@ -118,7 +137,90 @@ impl Sniffer {
         None
     }
     pub fn sniff_quic_sni(payload: &[u8]) -> Option<String> {
-        if payload.len() > 100 && (payload[0] & 0x80 != 0) { return Self::sniff_tls_sni(&payload[40..]); }
-        None
+        quic::sniff::sniff_quic(payload).ok().map(|header| header.domain)
     }
 }
+
+fn sniff_content(payload: &[u8], sniffers: &[ProtocolSniffer]) -> Result<SniffResult> {
+    // Match Go Sniff: defer ErrNoClue until all candidates run, but a
+    // protocol-matched need-more-data error wins immediately.
+    let mut pending = false;
+    for sniff in sniffers {
+        match sniff(payload) {
+            Ok(result) => return Ok(result),
+            Err(Error::Protocol(message)) if message == ERR_NO_CLUE => pending = true,
+            Err(error) if is_need_more_data(&error) => return Err(error),
+            Err(_) => {}
+        }
+    }
+    if pending {
+        Err(no_clue())
+    } else {
+        Err(Error::Protocol("unknown content".into()))
+    }
+}
+
+fn no_clue() -> Error {
+    Error::Protocol(ERR_NO_CLUE.into())
+}
+
+fn is_need_more_data(error: &Error) -> bool {
+    matches!((error, err_proto_need_more_data()),
+        (Error::Protocol(message), Error::Protocol(expected)) if message == &expected)
+}
+
+// Go distinguishes a complete packet header with a truncated declared payload
+// (ErrNoClue) from a malformed/truncated header (rejected). This framing-only
+// probe runs only after the common decoder fails; it can never accept QUIC.
+fn incomplete_quic_packet(mut payload: &[u8]) -> bool {
+    fn packet_end(payload: &[u8]) -> Option<usize> {
+        fn varint(payload: &[u8], pos: &mut usize) -> Option<usize> {
+            let first = *payload.get(*pos)?;
+            let width = 1usize << (first >> 6);
+            let bytes = payload.get(*pos..*pos + width)?;
+            let mut value = u64::from(first & 0x3f);
+            for byte in &bytes[1..] { value = (value << 8) | u64::from(*byte); }
+            *pos += width;
+            (value <= 65535).then_some(value as usize)
+        }
+        let first = *payload.first()?;
+        if first & 0xc0 != 0xc0 { return None; }
+        let version = u32::from_be_bytes(payload.get(1..5)?.try_into().ok()?);
+        let initial_type = match version {
+            1 | 0xff00_001d => 0,
+            0x6b33_43cf => 1,
+            _ => return None,
+        };
+        let mut pos = 6 + usize::from(*payload.get(5)?);
+        pos += 1 + usize::from(*payload.get(pos)?);
+        payload.get(..pos)?;
+        if (first & 0x30) >> 4 == initial_type {
+            let length = varint(payload, &mut pos)?;
+            pos += length;
+            payload.get(..pos)?;
+        }
+        let length = varint(payload, &mut pos)?;
+        if length < 4 { return None; }
+        Some(pos + length)
+    }
+    while !payload.is_empty() {
+        let Some(end) = packet_end(payload) else { return false; };
+        if end > payload.len() { return true; }
+        // A shared "truncated quic data" error may originate in an earlier
+        // authenticated frame, not the last packet header. Do not let a later
+        // incomplete packet downgrade that failure to ErrNoClue.
+        match quic::sniff::sniff_quic(&payload[..end]) {
+            Ok(_) => {}
+            Err(error) if is_need_more_data(&error) => {}
+            _ => return false,
+        }
+        payload = &payload[end..];
+        let padding = payload.iter().take_while(|byte| **byte == 0).count();
+        payload = &payload[padding..];
+    }
+    false
+}
+
+#[cfg(test)]
+#[path = "sniffer_wire_test.rs"]
+mod wire_test;

@@ -21,28 +21,17 @@ mod tests {
     }
 
     #[test]
-    fn test_sniffer_tls_sni_synthetic() {
-        let mut payload = vec![0x16, 0x03, 0x01, 0x00, 0x60];
-        payload.push(0x01);
-        payload.extend_from_slice(&[0x00, 0x00, 0x5c]);
-        payload.extend_from_slice(&[0x03, 0x03]);
-        payload.extend_from_slice(&[0u8; 32]);
-        payload.push(0x00);
-        payload.extend_from_slice(&[0x00, 0x02, 0x13, 0x01]);
-        payload.extend_from_slice(&[0x01, 0x00]);
-
-        payload.extend_from_slice(&[0x00, 0x11]);
-        payload.extend_from_slice(&[0x00, 0x00]);
-        payload.extend_from_slice(&[0x00, 0x0d]);
-        payload.extend_from_slice(&[0x00, 0x0b]);
-        payload.push(0x00);
-        payload.extend_from_slice(&[0x00, 0x08]);
-        payload.extend_from_slice(b"xray.com");
-
+    fn test_sniffer_tls_sni_go_record() {
+        // The old synthetic packet declared 96 record bytes but supplied 64.
+        // Use a complete captured Go ClientHello instead of bypassing framing.
+        let payload = hex::decode(
+            include_str!("../../common/protocol/tls/testdata/go_1.hex")
+                .split_whitespace().collect::<String>(),
+        ).unwrap();
         let sniffer = Sniffer::new(None);
         let res = sniffer.sniff(&payload, Network::Tcp).unwrap();
         assert_eq!(res.protocol, "tls");
-        assert_eq!(res.domain, "xray.com");
+        assert_eq!(res.domain, "c.s-microsoft.com");
     }
 
     #[test]

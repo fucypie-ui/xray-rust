@@ -1,4 +1,5 @@
 use crate::common::errors::{Error, Result};
+use crate::common::protocol::protocol::err_proto_need_more_data;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TlsSniffHeader {
@@ -28,6 +29,7 @@ pub fn read_client_hello(mut data: &[u8]) -> Result<String> {
     data = &data[39 + sid_len..];
     if data.len() < 2 { return Err(err("no cipher suite len")); }
     let cs_len = u16_be(data);
+    if cs_len % 2 != 0 { return Err(err("invalid cipher suite len")); }
     data = data.get(2 + cs_len..).ok_or_else(|| err("invalid cipher suite len"))?;
     let comp_len = *data.first().ok_or_else(|| err("no compression method len"))? as usize;
     data = data.get(1 + comp_len..).ok_or_else(|| err("invalid compression method len"))?;
@@ -35,7 +37,8 @@ pub fn read_client_hello(mut data: &[u8]) -> Result<String> {
     let ext_len = u16_be(data);
     data = &data[2..];
     if ext_len != data.len() { return Err(err("extensions length mismatch")); }
-    while data.len() >= 4 {
+    while !data.is_empty() {
+        if data.len() < 4 { return Err(err("extension header truncated")); }
         let (ext_type, len) = (u16_be(data), u16_be(&data[2..]));
         data = &data[4..];
         if data.len() < len { return Err(err("extension truncated")); }
@@ -44,13 +47,20 @@ pub fn read_client_hello(mut data: &[u8]) -> Result<String> {
             if sni.len() < 2 { return Err(err("sni data too short")); }
             let names_len = u16_be(sni);
             sni = &sni[2..];
-            if sni.len() < names_len { return Err(err("sni names len mismatch")); }
-            while sni.len() >= 3 {
+            if sni.len() != names_len { return Err(err("sni names len mismatch")); }
+            while !sni.is_empty() {
+                if sni.len() < 3 { return Err(err("sni name header truncated")); }
                 let (ntype, nlen) = (sni[0], u16_be(&sni[1..]));
                 sni = &sni[3..];
                 if sni.len() < nlen { return Err(err("sni name truncated")); }
                 if ntype == 0 {
-                    return Ok(std::str::from_utf8(&sni[..nlen]).map_err(|_| err("invalid utf8 sni"))?.to_string());
+                    let name = &sni[..nlen];
+                    if name.is_empty() { return Err(err("empty sni host name")); }
+                    if name.iter().any(|byte| *byte <= b' ') {
+                        return Err(err_proto_need_more_data());
+                    }
+                    if name.last() == Some(&b'.') { return Err(err("sni host name has trailing dot")); }
+                    return Ok(std::str::from_utf8(name).map_err(|_| err("invalid utf8 sni"))?.to_string());
                 }
                 sni = &sni[nlen..];
             }

@@ -77,35 +77,19 @@ mod tests {
 
     #[test]
     fn test_sniffer_tls_client_hello() {
-        let domain = b"xray.com";
-        let mut sni_ext = Vec::new();
-        sni_ext.extend_from_slice(&[0x00, 0x00]);
-        let sni_list_len = (domain.len() + 3) as u16;
-        let ext_len = (domain.len() + 5) as u16;
-        sni_ext.extend_from_slice(&ext_len.to_be_bytes());
-        sni_ext.extend_from_slice(&sni_list_len.to_be_bytes());
-        sni_ext.push(0x00);
-        sni_ext.extend_from_slice(&(domain.len() as u16).to_be_bytes());
-        sni_ext.extend_from_slice(domain);
-
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&[0x16, 0x03, 0x01, 0x00, 0x00]);
-        payload.push(0x01);
-        payload.extend_from_slice(&[0x00, 0x00, 0x00]);
-        payload.extend_from_slice(&[0x03, 0x03]);
-        payload.extend_from_slice(&[0u8; 32]);
-        payload.push(0x00);
-        payload.extend_from_slice(&[0x00, 0x02, 0x13, 0x01]);
-        payload.extend_from_slice(&[0x01, 0x00]);
-        payload.extend_from_slice(&(sni_ext.len() as u16).to_be_bytes());
-        payload.extend_from_slice(&sni_ext);
+        // The previous synthetic packet declared zero record/handshake bytes.
+        // Exercise production framing with a complete captured Go TLS record.
+        let payload = hex::decode(
+            include_str!("../../common/protocol/tls/testdata/go_2.hex")
+                .split_whitespace().collect::<String>(),
+        ).unwrap();
 
         let sniffer = Sniffer::new(None);
         let res = sniffer
             .sniff(&payload, Network::Tcp)
             .expect("Sniff should succeed");
         assert_eq!(res.protocol, "tls");
-        assert_eq!(res.domain, "xray.com");
+        assert_eq!(res.domain, "www07.clicktale.net");
     }
 
     #[test]
