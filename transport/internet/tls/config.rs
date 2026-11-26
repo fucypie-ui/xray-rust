@@ -124,7 +124,7 @@ impl TlsConfig {
         if self.certificate.iter().any(|c| c.usage == CertificateUsage::AuthorityIssue)
             && let Ok(g) = rcgen::generate_simple_self_signed(vec![sni.to_string()])
         {
-            let cert = Certificate::new(g.cert.pem().into_bytes(), g.key_pair.serialize_pem().into_bytes(), CertificateUsage::Encipherment);
+            let cert = Certificate::new(g.cert.pem().into_bytes(), g.signing_key.serialize_pem().into_bytes(), CertificateUsage::Encipherment);
             cache.lock().unwrap().insert(sni.to_string(), cert.clone());
             return Some(cert);
         }

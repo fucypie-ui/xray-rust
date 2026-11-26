@@ -1,7 +1,7 @@
 pub mod config;
 pub mod conn;
 
-use rand::Rng;
+use rand::RngExt;
 
 #[derive(Debug, Clone)]
 pub struct WeChatHeader {
@@ -10,8 +10,8 @@ pub struct WeChatHeader {
 
 impl WeChatHeader {
     pub fn new() -> Self {
-        let mut rng = rand::thread_rng();
-        Self { sn: rng.r#gen::<u16>() as u32, }
+        let mut rng = rand::rng();
+        Self { sn: rng.random::<u16>() as u32, }
     }
     pub fn size(&self) -> usize { 13 }
     pub fn serialize(&mut self, buf: &mut [u8]) {

@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::RngExt;
 use super::config::{UDPConfig, UDPItem};
 use crate::common::errors::{Error, Result};
 
@@ -55,13 +55,13 @@ impl UdpCustomClient {
 }
 
 fn serialize_udp_items(template: &[u8], items: &[UDPItem], buf: &mut [u8]) {
-    let (mut rng, mut out, mut idx) = (rand::thread_rng(), template.to_vec(), 0);
+    let (mut rng, mut out, mut idx) = (rand::rng(), template.to_vec(), 0);
     for item in items {
         if item.rand > 0 {
             let r_min = (item.rand_min as u8).min(item.rand_max as u8);
             let r_max = (item.rand_max as u8).max(r_min);
             for _ in 0..item.rand {
-                out[idx] = if r_min == r_max { r_min } else { rng.gen_range(r_min..=r_max) };
+                out[idx] = if r_min == r_max { r_min } else { rng.random_range(r_min..=r_max) };
                 idx += 1;
             }
         } else { idx += item.packet.len(); }

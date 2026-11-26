@@ -77,6 +77,20 @@ pingora-timeout = "0.9.1"
 hickory-resolver = { version = "0.26.4", features = ["system-config", "tokio", "https-ring", "tls-ring", "webpki-roots"] }
 hickory-proto = "0.26.4"
 
+# Protocol engines and configuration formats shared with the parity lanes.
+boringtun = { version = "0.7.1", default-features = false }
+smoltcp = { version = "0.14.0", default-features = false, features = ["std", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp", "socket-udp", "proto-ipv4-fragmentation", "proto-ipv6-fragmentation", "reassembly-buffer-size-65536", "fragmentation-buffer-size-65536"] }
+quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+h3 = { version = "0.0.8", features = ["i-implement-a-third-party-backend-and-opt-into-breaking-changes"] }
+h3-quinn = "0.0.10"
+ring = "0.17.14"
+x509-parser = { version = "0.18.1", default-features = false }
+serde_yaml_ng = "0.10.0"
+toml = "1.2.3+spec-1.1.0"
+prost = "0.14.6"
+prost-reflect = { version = "0.16.5", features = ["serde"] }
+json_comments = "0.2.2"
+
 [target.'cfg(not(target_os = "android"))'.dependencies]
 pingora-core = { version = "0.9.1", features = ["rustls"] }
 pingora-load-balancing = { version = "0.9.1", features = ["rustls"] }
@@ -109,3 +123,7 @@ rust_2024_compatibility = { level = "deny", priority = -1 }
 all = { level = "deny", priority = -1 }
 module_inception = "allow"
 type_complexity = "allow"
+
+# Approved REALITY hooks; package version remains the latest registry stable.
+[patch.crates-io]
+rustls = { git = "https://github.com/cfal/rustls", rev = "f1a23c187330386e9e7f14a21dbae368034dc430" }

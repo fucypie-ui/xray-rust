@@ -26,7 +26,7 @@ pub(crate) fn bridge_ws_stream(ws_stream: TungsteniteStream<BoxStream>, heartbea
     let (mut ws_sink, mut ws_stream) = ws_stream.split();
     let (mut r_client, w_server) = tokio::io::duplex(64 * 1024);
     let (r_server, mut w_client) = tokio::io::duplex(64 * 1024);
-    let (pong_tx, mut pong_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(4);
+    let (pong_tx, mut pong_rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(4);
     tokio::spawn(async move {
         use tokio::io::AsyncReadExt;
         let mut buf = vec![0u8; 16 * 1024];
@@ -46,7 +46,7 @@ pub(crate) fn bridge_ws_stream(ws_stream: TungsteniteStream<BoxStream>, heartbea
                         let _ = ws_sink.close().await;
                         break;
                     }
-                    Ok(n) => if ws_sink.send(Message::Binary(buf[..n].to_vec())).await.is_err() { break; },
+                    Ok(n) => if ws_sink.send(Message::Binary(bytes::Bytes::copy_from_slice(&buf[..n]))).await.is_err() { break; },
                     Err(_) => break,
                 },
                 Some(payload) = pong_rx.recv() => {
@@ -57,7 +57,7 @@ pub(crate) fn bridge_ws_stream(ws_stream: TungsteniteStream<BoxStream>, heartbea
                         Some(iv) => iv.tick().await,
                         None => std::future::pending().await,
                     }
-                } => if ws_sink.send(Message::Ping(Vec::new())).await.is_err() { break; }
+                } => if ws_sink.send(Message::Ping(bytes::Bytes::new())).await.is_err() { break; }
             }
         }
     });

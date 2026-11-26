@@ -51,15 +51,15 @@ impl Fragmenter {
             writer.write_all(data).await?;
             return Ok(());
         }
-        use rand::Rng;
-        let (mut offset, mut rng) = (0, rand::thread_rng());
+        use rand::RngExt;
+        let (mut offset, mut rng) = (0, rand::rng());
         while offset < data.len() {
-            let chunk_size = rng.gen_range(self.config.min_len..=self.config.max_len).min(data.len() - offset);
+            let chunk_size = rng.random_range(self.config.min_len..=self.config.max_len).min(data.len() - offset);
             writer.write_all(&data[offset..offset + chunk_size]).await?;
             writer.flush().await?;
             offset += chunk_size;
             if offset < data.len() {
-                let ms = rng.gen_range(self.config.min_delay.as_millis()..=self.config.max_delay.as_millis());
+                let ms = rng.random_range(self.config.min_delay.as_millis()..=self.config.max_delay.as_millis());
                 tokio::time::sleep(Duration::from_millis(ms as u64)).await;
             }
         }

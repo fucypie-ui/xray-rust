@@ -6,7 +6,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use clap::Args;
 use ml_kem::{DecapsulationKey768, KeyExport, Seed};
-use rand::RngCore;
+use rand::Rng;
 
 #[derive(Args, Debug, Default)]
 pub struct Mlkem768Options {
@@ -21,7 +21,7 @@ pub fn gen_mlkem768(input_seed: Option<&[u8; 64]>) -> ([u8; 64], Vec<u8>, [u8; 3
     let mut seed = [0u8; 64];
     match input_seed {
         Some(input) => seed.copy_from_slice(input),
-        None => rand::thread_rng().fill_bytes(&mut seed),
+        None => rand::rng().fill_bytes(&mut seed),
     }
     // Use our existing rand 0.8 only for the seed; the deterministic
     // constructor avoids coupling its rand_core version to ml-kem's.

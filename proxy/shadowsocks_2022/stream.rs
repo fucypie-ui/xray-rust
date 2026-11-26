@@ -1,7 +1,7 @@
 //! Single-user SIP022 AES-GCM TCP framing, ported from Go cipher/kdf/stream.go.
 //! The two directions have independent salts, session keys and nonce counters.
 use crate::common::net::{Address, BoxStream, Destination, Network};
-use rand::{Rng, RngCore};
+use rand::{RngExt, TryRng};
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::pin::Pin;
@@ -28,7 +28,7 @@ pub(crate) fn validate_timestamp(timestamp: u64, now: u64) -> io::Result<()> {
 
 fn random_salt(method: CipherMethod) -> io::Result<Vec<u8>> {
     let mut salt = vec![0; method.key_length()];
-    rand::rngs::OsRng.try_fill_bytes(&mut salt).map_err(io::Error::other)?;
+    rand::rngs::SysRng.try_fill_bytes(&mut salt).map_err(io::Error::other)?;
     Ok(salt)
 }
 
@@ -179,7 +179,7 @@ pub(crate) fn decode_response_header(
 pub async fn connect_tcp(mut stream: BoxStream, method: CipherMethod, key: Vec<u8>, destination: &Destination) -> io::Result<EncryptedStream> {
     let salt = random_salt(method)?;
     // connect() has no payload yet: padding is mandatory in the variable header.
-    let padding_length = rand::thread_rng().gen_range(1..=MAX_PADDING_LENGTH);
+    let padding_length = rand::rng().random_range(1..=MAX_PADDING_LENGTH);
     let (request, writer) = encode_request(method, &key, &salt, destination, &vec![0; padding_length], &[], unix_time()?)?;
     stream.write_all(&request).await?;
     stream.flush().await?;

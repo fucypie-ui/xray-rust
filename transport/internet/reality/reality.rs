@@ -176,7 +176,7 @@ impl RealityServer {
             .map_err(|e| Error::Protocol(format!("REALITY temp cert generation failed: {}", e)))?;
         let tls_server = TlsServer::from_pem(
             ck.cert.pem().as_bytes(),
-            ck.key_pair.serialize_pem().as_bytes(),
+            ck.signing_key.serialize_pem().as_bytes(),
             vec![b"h2".to_vec(), b"http/1.1".to_vec()],
         )?;
         let replayed: BoxStream = Box::pin(PrefixedStream { prefix: record, offset: 0, inner: stream });
@@ -265,7 +265,7 @@ impl RealityClient {
         seal_session_id(&auth_key, &client_random[20..], (1, 26, 3), now_unix, &self.short_id, client_hello_raw)
     }
     pub fn generate_auth(&self) -> ([u8; 32], [u8; 32]) {
-        let secret = EphemeralSecret::random_from_rng(rand::thread_rng());
+        let secret = EphemeralSecret::random_from_rng(&mut rand::rng());
         let client_pub = PublicKey::from(&secret);
         let shared_secret = secret.diffie_hellman(&self.public_key);
         (*client_pub.as_bytes(), *shared_secret.as_bytes())

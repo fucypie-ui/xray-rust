@@ -42,8 +42,8 @@ pub struct RequestHeader {
 
 impl RequestHeader {
     pub fn new(user_id: Uuid, command: RequestCommand, destination: Destination) -> Self {
-        use rand::RngCore;
-        let mut rng = rand::thread_rng();
+        use rand::Rng;
+        let mut rng = rand::rng();
         let mut request_body_iv = [0u8; 16];
         let mut request_body_key = [0u8; 16];
         rng.fill_bytes(&mut request_body_iv);

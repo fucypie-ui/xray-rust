@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::RngExt;
 
 pub use super::config_pb::{Config, Header, Method, RequestConfig, ResponseConfig, Status, Version};
 
@@ -7,8 +7,8 @@ fn pick_string(arr: &[String]) -> String {
         0 => String::new(),
         1 => arr[0].clone(),
         n => {
-            let mut rng = rand::thread_rng();
-            let idx = rng.gen_range(0..n);
+            let mut rng = rand::rng();
+            let idx = rng.random_range(0..n);
             arr[idx].clone()
         }
     }

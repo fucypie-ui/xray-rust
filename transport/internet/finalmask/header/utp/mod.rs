@@ -3,7 +3,7 @@ pub mod conn;
 
 pub use conn::UtpPacketConn;
 
-use rand::Rng;
+use rand::RngExt;
 
 #[derive(Debug, Clone)]
 pub struct UtpHeader {
@@ -14,11 +14,11 @@ pub struct UtpHeader {
 
 impl UtpHeader {
     pub fn new() -> Self {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         Self {
             header: 1,
             extension: 0,
-            connection_id: rng.r#gen(),
+            connection_id: rng.random(),
         }
     }
     pub fn size(&self) -> usize { 4 }

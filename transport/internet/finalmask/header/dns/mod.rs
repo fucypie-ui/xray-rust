@@ -2,7 +2,7 @@ pub mod config;
 pub mod conn;
 
 use crate::common::errors::{Error, Result};
-use rand::Rng;
+use rand::RngExt;
 
 #[derive(Debug, Clone)]
 pub struct DnsHeader {
@@ -12,9 +12,9 @@ pub struct DnsHeader {
 
 impl DnsHeader {
     pub fn new(domain: impl Into<String>) -> Self {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         Self {
-            id: rng.r#gen(),
+            id: rng.random(),
             domain: domain.into(),
         }
     }

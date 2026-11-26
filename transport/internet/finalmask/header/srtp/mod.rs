@@ -3,7 +3,7 @@ pub mod conn;
 
 pub use conn::SrtpPacketConn;
 
-use rand::Rng;
+use rand::RngExt;
 
 #[derive(Debug, Clone)]
 pub struct SrtpHeader {
@@ -13,10 +13,10 @@ pub struct SrtpHeader {
 
 impl SrtpHeader {
     pub fn new() -> Self {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         Self {
             header: 0xB5E8,
-            number: rng.r#gen(),
+            number: rng.random(),
         }
     }
     pub fn size(&self) -> usize { 4 }

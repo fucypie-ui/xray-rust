@@ -95,7 +95,7 @@ pub fn apply_fingerprint(provider: &mut rustls::crypto::CryptoProvider, fingerpr
         }
         "random" | "randomized" => {
             use rand::seq::SliceRandom;
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             provider.cipher_suites.shuffle(&mut rng);
             provider.kx_groups.shuffle(&mut rng);
         }

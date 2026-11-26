@@ -1,7 +1,7 @@
 use super::config::Aes128GcmConfig;
 use crate::common::errors::{Error, Result};
 use aes_gcm::{Aes128Gcm, Nonce, aead::{Aead, KeyInit}};
-use rand::RngCore;
+use rand::Rng;
 use sha2::{Digest, Sha256};
 
 pub const GCM_NONCE_SIZE: usize = 12;
@@ -30,7 +30,7 @@ impl Aes128GcmPacketConn {
     pub fn overhead(&self) -> usize { GCM_TAG_SIZE }
     pub fn wrap(&self, plaintext: &[u8]) -> Result<Vec<u8>> {
         let mut nonce = [0u8; GCM_NONCE_SIZE];
-        rand::thread_rng().fill_bytes(&mut nonce);
+        rand::rng().fill_bytes(&mut nonce);
         let ct = self.cipher.encrypt(Nonce::from_slice(&nonce), plaintext).map_err(|e| Error::Protocol(format!("aes128gcm seal error: {:?}", e)))?;
         let mut out = Vec::with_capacity(GCM_NONCE_SIZE + ct.len());
         out.extend_from_slice(&nonce);

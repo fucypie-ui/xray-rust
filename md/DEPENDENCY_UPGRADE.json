@@ -799,6 +799,174 @@
       "source": "https://crates.io/api/v1/crates/tokio",
       "checked_at": "2026-11-26T20:05:33.117691+00:00",
       "requirement": "1.54.1"
+    },
+    {
+      "manifest": "Cargo.toml",
+      "section": "dependencies",
+      "alias": "boringtun",
+      "crate": "boringtun",
+      "previous_requirement": "new (protocol/config/REALITY integration)",
+      "requirement": "0.7.1",
+      "latest_stable": "0.7.1",
+      "yanked": false,
+      "published_at": "2026-05-01T22:53:45.364117Z",
+      "rust_version": null,
+      "source": "https://crates.io/api/v1/crates/boringtun",
+      "checked_at": "2026-11-26T20:09:37.720540+00:00"
+    },
+    {
+      "manifest": "Cargo.toml",
+      "section": "dependencies",
+      "alias": "smoltcp",
+      "crate": "smoltcp",
+      "previous_requirement": "new (protocol/config/REALITY integration)",
+      "requirement": "0.14.0",
+      "latest_stable": "0.14.0",
+      "yanked": false,
+      "published_at": "2026-08-17T01:47:21.367822Z",
+      "rust_version": "1.91",
+      "source": "https://crates.io/api/v1/crates/smoltcp",
+      "checked_at": "2026-11-26T20:09:38.676012+00:00"
+    },
+    {
+      "manifest": "Cargo.toml",
+      "section": "dependencies",
+      "alias": "quinn",
+      "crate": "quinn",
+      "previous_requirement": "new (protocol/config/REALITY integration)",
+      "requirement": "0.11.12",
+      "latest_stable": "0.11.12",
+      "yanked": false,
+      "published_at": "2026-09-14T10:08:47.662258Z",
+      "rust_version": "1.85",
+      "source": "https://crates.io/api/v1/crates/quinn",
+      "checked_at": "2026-11-26T20:09:38.609428+00:00"
+    },
+    {
+      "manifest": "Cargo.toml",
+      "section": "dependencies",
+      "alias": "h3",
+      "crate": "h3",
+      "previous_requirement": "new (protocol/config/REALITY integration)",
+      "requirement": "0.0.8",
+      "latest_stable": "0.0.8",
+      "yanked": false,
+      "published_at": "2025-05-06T15:37:32.883527Z",
+      "rust_version": "1.70",
+      "source": "https://crates.io/api/v1/crates/h3",
+      "checked_at": "2026-11-26T20:09:37.674435+00:00"
+    },
+    {
+      "manifest": "Cargo.toml",
+      "section": "dependencies",
+      "alias": "h3-quinn",
+      "crate": "h3-quinn",
+      "previous_requirement": "new (protocol/config/REALITY integration)",
+      "requirement": "0.0.10",
+      "latest_stable": "0.0.10",
+      "yanked": false,
+      "published_at": "2025-05-06T20:35:46.241359Z",
+      "rust_version": "1.70",
+      "source": "https://crates.io/api/v1/crates/h3-quinn",
+      "checked_at": "2026-11-26T20:09:38.406302+00:00"
+    },
+    {
+      "manifest": "Cargo.toml",
+      "section": "dependencies",
+      "alias": "ring",
+      "crate": "ring",
+      "previous_requirement": "new (protocol/config/REALITY integration)",
+      "requirement": "0.17.14",
+      "latest_stable": "0.17.14",
+      "yanked": false,
+      "published_at": "2025-03-11T19:42:03.889273Z",
+      "rust_version": "1.66.0",
+      "source": "https://crates.io/api/v1/crates/ring",
+      "checked_at": "2026-11-26T20:09:39.841863+00:00"
+    },
+    {
+      "manifest": "Cargo.toml",
+      "section": "dependencies",
+      "alias": "x509-parser",
+      "crate": "x509-parser",
+      "previous_requirement": "new (protocol/config/REALITY integration)",
+      "requirement": "0.18.1",
+      "latest_stable": "0.18.1",
+      "yanked": false,
+      "published_at": "2026-02-05T09:30:31.546618Z",
+      "rust_version": "1.67.1",
+      "source": "https://crates.io/api/v1/crates/x509-parser",
+      "checked_at": "2026-11-26T20:09:39.245614+00:00"
+    },
+    {
+      "manifest": "Cargo.toml",
+      "section": "dependencies",
+      "alias": "serde_yaml_ng",
+      "crate": "serde_yaml_ng",
+      "previous_requirement": "new (protocol/config/REALITY integration)",
+      "requirement": "0.10.0",
+      "latest_stable": "0.10.0",
+      "yanked": false,
+      "published_at": "2024-05-26T19:57:45.710414Z",
+      "rust_version": "1.64",
+      "source": "https://crates.io/api/v1/crates/serde_yaml_ng",
+      "checked_at": "2026-11-26T20:09:39.670042+00:00"
+    },
+    {
+      "manifest": "Cargo.toml",
+      "section": "dependencies",
+      "alias": "toml",
+      "crate": "toml",
+      "previous_requirement": "new (protocol/config/REALITY integration)",
+      "requirement": "1.2.3+spec-1.1.0",
+      "latest_stable": "1.2.3+spec-1.1.0",
+      "yanked": false,
+      "published_at": "2026-11-25T01:44:12.122385Z",
+      "rust_version": "1.85",
+      "source": "https://crates.io/api/v1/crates/toml",
+      "checked_at": "2026-11-26T20:09:39.954384+00:00"
+    },
+    {
+      "manifest": "Cargo.toml",
+      "section": "dependencies",
+      "alias": "prost",
+      "crate": "prost",
+      "previous_requirement": "new (protocol/config/REALITY integration)",
+      "requirement": "0.14.6",
+      "latest_stable": "0.14.6",
+      "yanked": false,
+      "published_at": "2026-11-12T17:42:17.010527Z",
+      "rust_version": "1.85",
+      "source": "https://crates.io/api/v1/crates/prost",
+      "checked_at": "2026-11-26T20:09:40.088138+00:00"
+    },
+    {
+      "manifest": "Cargo.toml",
+      "section": "dependencies",
+      "alias": "prost-reflect",
+      "crate": "prost-reflect",
+      "previous_requirement": "new (protocol/config/REALITY integration)",
+      "requirement": "0.16.5",
+      "latest_stable": "0.16.5",
+      "yanked": false,
+      "published_at": "2026-07-09T22:11:04.717484Z",
+      "rust_version": "1.82.0",
+      "source": "https://crates.io/api/v1/crates/prost-reflect",
+      "checked_at": "2026-11-26T20:09:40.733630+00:00"
+    },
+    {
+      "manifest": "Cargo.toml",
+      "section": "dependencies",
+      "alias": "json_comments",
+      "crate": "json_comments",
+      "previous_requirement": "new (protocol/config/REALITY integration)",
+      "requirement": "0.2.2",
+      "latest_stable": "0.2.2",
+      "yanked": false,
+      "published_at": "2023-11-03T06:07:26.854567Z",
+      "rust_version": null,
+      "source": "https://crates.io/api/v1/crates/json_comments",
+      "checked_at": "2026-11-26T20:09:40.224327+00:00"
     }
   ],
   "replaced_dependencies": [
@@ -816,5 +984,14 @@
       "checked_at": "2026-11-26T20:05:30.860163+00:00",
       "requirement": "0.10.1"
     }
-  ]
+  ],
+  "source_overrides": {
+    "rustls": {
+      "git": "https://github.com/cfal/rustls",
+      "rev": "f1a23c187330386e9e7f14a21dbae368034dc430",
+      "package_version": "0.23.46",
+      "license": "Apache-2.0 OR ISC OR MIT",
+      "source": "https://raw.githubusercontent.com/cfal/rustls/f1a23c187330386e9e7f14a21dbae368034dc430/rustls/Cargo.toml"
+    }
+  }
 }

@@ -1,7 +1,7 @@
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes128Gcm, Nonce as AesNonce};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce as ChaChaNonce};
-use rand::Rng;
+use rand::RngExt;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -98,11 +98,11 @@ pub fn parse_padding(padding: &str) -> Result<(Vec<[i32; 3]>, Vec<[i32; 3]>)> {
 }
 
 pub fn create_padding(padding_lens: &[[i32; 3]], padding_gaps: &[[i32; 3]]) -> (usize, Vec<usize>, Vec<Duration>) {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let sample = |rng: &mut rand::rngs::ThreadRng, y: &[i32; 3]| {
-        if y[0] >= rng.gen_range(0..=100) {
+        if y[0] >= rng.random_range(0..=100) {
             let (lo, hi) = (y[1].min(y[2]), y[1].max(y[2]));
-            if hi > lo { rng.gen_range(lo..=hi) } else { lo }
+            if hi > lo { rng.random_range(lo..=hi) } else { lo }
         } else { 0 }
     };
     let lens_in = if padding_lens.is_empty() { &[[100, 111, 1111], [50, 0, 3333]][..] } else { padding_lens };

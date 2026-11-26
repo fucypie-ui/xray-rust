@@ -12,7 +12,7 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[2]
 MANIFESTS = [Path("Cargo.toml"), Path("debug_panel/dioxus_app/Cargo.toml")]
 USER_AGENT = "xray-rust-dependency-audit/1.0 (https://github.com/fucypie-ui/xray-rust)"
-STABLE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\+[^-]+)?$")
+STABLE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\+[0-9A-Za-z.-]+)?$")
 
 
 def direct_dependencies(path):
@@ -59,6 +59,19 @@ def verify_lock(metadata_path, manifest):
     root = next(p for p in packages.values() if Path(p["manifest_path"]).resolve() == (ROOT / manifest).resolve())
     node = next(n for n in metadata["resolve"]["nodes"] if n["id"] == root["id"])
     selected = {d["pkg"] for d in node["deps"]}
+    current = list(direct_dependencies(Path(manifest)))
+    recorded = [e for e in evidence["dependencies"] if e["manifest"] == manifest]
+    key = lambda e: (e["section"], e["alias"], e["crate"])
+    if sorted(map(key, current)) != sorted(map(key, recorded)):
+        raise ValueError(f"{manifest}: dependency sections differ from the official registry audit")
+    requirements = {key(e): e["previous_requirement"] for e in current}
+    for entry in recorded:
+        if requirements[key(entry)] != entry["requirement"]:
+            raise ValueError(f"{manifest}: unaudited requirement for {entry['alias']}")
+    overrides = evidence.get("source_overrides", {}) if manifest == "Cargo.toml" else {}
+    actual_patches = tomllib.loads((ROOT / manifest).read_text()).get("patch", {}).get("crates-io", {})
+    if set(actual_patches) != set(overrides):
+        raise ValueError(f"{manifest}: unaudited registry source override")
     checked = []
     for entry in evidence["dependencies"]:
         if entry["manifest"] != manifest:
@@ -67,7 +80,14 @@ def verify_lock(metadata_path, manifest):
         versions = sorted({p["version"] for p in matches})
         if versions != [entry["latest_stable"]]:
             raise ValueError(f"{manifest}: {entry['alias']}: expected {entry['latest_stable']}, resolved {versions}")
-        checked.append({"alias": entry["alias"], "crate": entry["crate"], "version": versions[0], "section": entry["section"]})
+        if override := overrides.get(entry["crate"]):
+            patch = actual_patches[entry["crate"]]
+            if any(patch.get(k) != override[k] for k in ("git", "rev")):
+                raise ValueError(f"Unreviewed source override: {entry['crate']}")
+            expected = f"git+{override['git']}?rev={override['rev']}#{override['rev']}"
+            if any(p.get("source") != expected for p in matches):
+                raise ValueError(f"{entry['crate']}: expected pinned source {expected}")
+        checked.append({"alias": entry["alias"], "crate": entry["crate"], "version": versions[0], "section": entry["section"], "sources": sorted({p["source"] for p in matches})})
     print(json.dumps({"manifest": manifest, "direct_dependencies_verified": len(checked), "dependencies": checked}, indent=2))
 
 
@@ -90,6 +110,12 @@ def main():
         for path in MANIFESTS:
             update_manifest(path, [entry for entry in entries if entry["manifest"] == str(path)])
     evidence = {"selection": "Maximum semantic version with no prerelease component and yanked=false; official crates.io API; all direct, target, dev and build dependency sections in both manifests.", "dependencies": entries}
+    previous_path = ROOT / "md/DEPENDENCY_UPGRADE.json"
+    if previous_path.exists():
+        previous = json.loads(previous_path.read_text())
+        for name in ("source_overrides", "replaced_dependencies"):
+            if name in previous:
+                evidence[name] = previous[name]
     (ROOT / "md/DEPENDENCY_UPGRADE.json").write_text(json.dumps(evidence, indent=2) + "\n")
     report = ["# Dependency upgrade audit", "", f"Verified from the official crates.io API on {datetime.datetime.now(datetime.timezone.utc).isoformat()} (UTC).", "", evidence["selection"], "", "The table records registry evidence, not a build-success claim. Linux resolver and CI results are recorded below after validation. No Rust, Cargo, rustc, or Go installation or execution is performed on Android.", "", "| Manifest / section | Dependency (registry package) | Previous requirement | Latest stable / new requirement | Published (UTC) | Source |", "| --- | --- | --- | --- | --- | --- |"]
     for e in entries:

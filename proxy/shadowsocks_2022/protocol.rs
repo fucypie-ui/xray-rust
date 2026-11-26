@@ -3,7 +3,7 @@
 //! handlers. Real authenticated TCP framing lives in `super::stream`.
 use crate::common::errors::{Error, Result};
 use crate::common::net::Destination;
-use rand::Rng;
+use rand::RngExt;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -21,7 +21,7 @@ pub struct SessionHeader {
 impl SessionHeader {
     pub fn new_client(destination: Destination) -> Self {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-        let session_id = rand::thread_rng().r#gen();
+        let session_id = rand::rng().random();
         Self {
             header_type: HEADER_TYPE_CLIENT,
             timestamp: now,

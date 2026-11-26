@@ -4,15 +4,15 @@ mod tests {
     use super::super::reality::{
         RealityClient, RealityServer, derive_auth_key, open_session_id, seal_session_id,
     };
-    use rand::RngCore;
+    use rand::Rng;
     use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
 
     #[test]
     fn test_reality_ecdh_hkdf_session_id_roundtrip() {
-        let server_secret = StaticSecret::random_from_rng(rand::thread_rng());
+        let server_secret = StaticSecret::random_from_rng(&mut rand::rng());
         let server_pub = PublicKey::from(&server_secret);
 
-        let client_secret = EphemeralSecret::random_from_rng(rand::thread_rng());
+        let client_secret = EphemeralSecret::random_from_rng(&mut rand::rng());
         let client_pub = PublicKey::from(&client_secret);
 
         let shared_client = client_secret.diffie_hellman(&server_pub);
@@ -20,7 +20,7 @@ mod tests {
         assert_eq!(shared_client.as_bytes(), shared_server.as_bytes());
 
         let mut client_random = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut client_random);
+        rand::rng().fill_bytes(&mut client_random);
 
         let auth_key_client = derive_auth_key(shared_client.as_bytes(), &client_random[..20]);
         let auth_key_server = derive_auth_key(shared_server.as_bytes(), &client_random[..20]);
@@ -55,7 +55,7 @@ mod tests {
 
     #[test]
     fn test_reality_client_server_full_auth_flow() {
-        let server_secret = StaticSecret::random_from_rng(rand::thread_rng());
+        let server_secret = StaticSecret::random_from_rng(&mut rand::rng());
         let server_pub = PublicKey::from(&server_secret);
         let server_pub_hex = hex::encode(server_pub.as_bytes());
         let server_priv_hex = hex::encode(server_secret.to_bytes());
@@ -72,11 +72,11 @@ mod tests {
         let client =
             RealityClient::new("www.apple.com", &server_pub_hex, short_id).expect("Client new");
 
-        let client_secret = EphemeralSecret::random_from_rng(rand::thread_rng());
+        let client_secret = EphemeralSecret::random_from_rng(&mut rand::rng());
         let client_pub = PublicKey::from(&client_secret);
 
         let mut client_random = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut client_random);
+        rand::rng().fill_bytes(&mut client_random);
 
         let client_hello_raw = b"full-client-hello-message";
         let session_id = client
@@ -100,9 +100,9 @@ mod tests {
 
     #[test]
     fn test_reality_tampered_aad_fails() {
-        let server_secret = StaticSecret::random_from_rng(rand::thread_rng());
+        let server_secret = StaticSecret::random_from_rng(&mut rand::rng());
         let server_pub = PublicKey::from(&server_secret);
-        let client_secret = EphemeralSecret::random_from_rng(rand::thread_rng());
+        let client_secret = EphemeralSecret::random_from_rng(&mut rand::rng());
         let client_pub = PublicKey::from(&client_secret);
 
         let client = RealityClient::new(
@@ -113,7 +113,7 @@ mod tests {
         .unwrap();
 
         let mut client_random = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut client_random);
+        rand::rng().fill_bytes(&mut client_random);
 
         let original_aad = b"original-client-hello";
         let session_id = client

@@ -19,7 +19,7 @@ mod tests {
 
         let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
         let _cert_pem = cert.cert.pem();
-        let _key_pem = cert.key_pair.serialize_pem();
+        let _key_pem = cert.signing_key.serialize_pem();
 
         let server_vless_port = pick_port().await;
         let server_cfg: Config = serde_json::from_value(serde_json::json!({

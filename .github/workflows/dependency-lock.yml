@@ -1,6 +1,15 @@
 name: Latest dependency validation
 
 on:
+  push:
+    branches: [port/dependency-latest]
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - debug_panel/dioxus_app/Cargo.toml
+      - debug_panel/dioxus_app/Cargo.lock
+      - .github/workflows/dependency-lock.yml
+      - .github/scripts/audit-direct-dependencies.py
   workflow_dispatch:
 
 permissions:

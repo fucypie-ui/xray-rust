@@ -1,11 +1,11 @@
 use crate::main::commands::base::command::Command;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use rand::RngCore;
+use rand::Rng;
 
 pub fn generate_ech_keypair() -> ([u8; 32], Vec<u8>) {
     let mut priv_key = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut priv_key);
+    rand::rng().fill_bytes(&mut priv_key);
     let mut config = Vec::new();
     config.extend_from_slice(b"\xfe\x0d");
     config.extend_from_slice(&priv_key);

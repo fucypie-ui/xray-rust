@@ -3,7 +3,7 @@ use super::dns::{
     base32_encode, decode_rdata_txt,
 };
 use crate::common::errors::{Error, Result};
-use rand::RngCore;
+use rand::Rng;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -21,7 +21,7 @@ pub struct XDnsClient {
 impl XDnsClient {
     pub fn new(domain_str: &str) -> Result<Self> {
         let mut client_id = [0u8; 8];
-        rand::thread_rng().fill_bytes(&mut client_id);
+        rand::rng().fill_bytes(&mut client_id);
         let domain = Name::parse(domain_str)?;
         Ok(Self {
             client_id,
@@ -48,7 +48,7 @@ impl XDnsClient {
         decoded.push((224 + n) as u8);
         let pad_start = decoded.len();
         decoded.resize(pad_start + n, 0);
-        rand::thread_rng().fill_bytes(&mut decoded[pad_start..]);
+        rand::rng().fill_bytes(&mut decoded[pad_start..]);
         if let Some(p) = payload.filter(|p| !p.is_empty()) {
             decoded.push(p.len() as u8);
             decoded.extend_from_slice(p);

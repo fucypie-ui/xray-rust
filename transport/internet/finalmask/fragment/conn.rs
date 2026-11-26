@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::RngExt;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::io;
@@ -42,7 +42,7 @@ impl FragmentConn {
     }
     fn rand_between(min: i64, max: i64) -> i64 {
         if min >= max { return min; }
-        rand::thread_rng().gen_range(min..=max)
+        rand::rng().random_range(min..=max)
     }
     fn sample_delay(&self, seg_idx: usize) -> u64 {
         let (d_min, d_max) = self.config.delay_for_segment(seg_idx);

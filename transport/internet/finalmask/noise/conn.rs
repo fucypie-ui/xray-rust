@@ -1,5 +1,5 @@
 use super::config::NoiseConfig;
-use rand::Rng;
+use rand::RngExt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -21,10 +21,10 @@ impl NoiseGenerator {
         }
     }
     pub fn generate_noise_packet(&self) -> Vec<u8> {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let min_sz = std::cmp::max(1, self.min_len);
         let max_sz = std::cmp::max(min_sz, self.max_len);
-        let len = rng.gen_range(min_sz..=max_sz);
+        let len = rng.random_range(min_sz..=max_sz);
         let mut buf = vec![0u8; len];
         rng.fill(&mut buf[..]);
         buf
@@ -51,21 +51,21 @@ impl NoisePacketConn {
         true
     }
     pub fn generate_noise_packets(&self) -> Vec<(Vec<u8>, Duration)> {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         self.config.items.iter()
             .map(|item| {
                 let pkt = if item.rand_max > 0 {
                     let min_sz = item.rand_min.max(0) as usize;
                     let max_sz = min_sz.max(item.rand_max as usize);
-                    let size = if max_sz > min_sz { rng.gen_range(min_sz..=max_sz) } else { min_sz };
+                    let size = if max_sz > min_sz { rng.random_range(min_sz..=max_sz) } else { min_sz };
                     let r_min = item.rand_range_min.clamp(0, 255) as u8;
                     let r_max = item.rand_range_max.clamp(r_min as i32, 255) as u8;
-                    (0..size).map(|_| if r_max > r_min { rng.gen_range(r_min..=r_max) } else { r_min }).collect()
+                    (0..size).map(|_| if r_max > r_min { rng.random_range(r_min..=r_max) } else { r_min }).collect()
                 } else {
                     item.packet.clone()
                 };
                 let delay_ms = if item.delay_max > item.delay_min {
-                    rng.gen_range(item.delay_min..=item.delay_max)
+                    rng.random_range(item.delay_min..=item.delay_max)
                 } else {
                     item.delay_min
                 };
@@ -75,9 +75,9 @@ impl NoisePacketConn {
     }
     pub fn mark_sent(&self, addr_str: &str) {
         let mut map = self.sessions.lock().unwrap();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let reset_secs = if self.config.reset_max > self.config.reset_min {
-            rng.gen_range(self.config.reset_min..=self.config.reset_max)
+            rng.random_range(self.config.reset_min..=self.config.reset_max)
         } else {
             self.config.reset_min
         };

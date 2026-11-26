@@ -3,7 +3,7 @@ use crate::common::protocol::protocol::err_proto_need_more_data;
 use crate::common::protocol::tls::sniff::read_client_hello;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::aes::Aes128;
-use aes_gcm::aes::cipher::{Block, BlockEncrypt};
+use aes_gcm::aes::cipher::{Block, BlockCipherEncrypt};
 use aes_gcm::Aes128Gcm;
 use hkdf::Hkdf;
 use sha2::Sha256;

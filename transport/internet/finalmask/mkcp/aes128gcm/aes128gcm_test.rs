@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::super::conn::{Aes128GcmPacketConn, GCM_NONCE_SIZE, GCM_TAG_SIZE};
-    use rand::RngCore;
+    use rand::Rng;
 
     #[test]
     fn test_aes128gcm_seal_open_roundtrip() {
@@ -24,7 +24,7 @@ mod tests {
     fn test_aes128gcm_bounce() {
         let conn = Aes128GcmPacketConn::new("psk-secret");
         let mut buf = vec![0u8; GCM_NONCE_SIZE + GCM_TAG_SIZE];
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         for _ in 0..1000 {
             rng.fill_bytes(&mut buf);

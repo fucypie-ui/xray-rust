@@ -119,7 +119,7 @@ pub fn generate_self_signed_cert(domain: &str) -> Result<(String, String)> {
     let cert = rcgen::generate_simple_self_signed(subject_alt_names)
         .map_err(|e| Error::Config(format!("Failed to generate self-signed cert: {}", e)))?;
     let cert_pem = cert.cert.pem();
-    let key_pem = cert.key_pair.serialize_pem();
+    let key_pem = cert.signing_key.serialize_pem();
     Ok((cert_pem, key_pem))
 }
 

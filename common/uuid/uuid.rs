@@ -1,5 +1,5 @@
 use crate::common::errors::{Error, Result};
-use rand::Rng;
+use rand::RngExt;
 use sha1::{Digest, Sha1};
 use std::fmt;
 
@@ -9,7 +9,7 @@ pub struct UUID(pub [u8; 16]);
 impl UUID {
     pub fn new() -> Self {
         let mut bytes = [0u8; 16];
-        rand::thread_rng().fill(&mut bytes);
+        rand::rng().fill(&mut bytes);
         bytes[6] = (bytes[6] & 0x0f) | (4 << 4);
         bytes[8] = (bytes[8] & 0x3f) | 0x80;
         UUID(bytes)
