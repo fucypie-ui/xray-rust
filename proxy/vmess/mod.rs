@@ -16,3 +16,8 @@ pub use outbound::Client as OutboundClient;
 pub use validator::MemoryValidator;
 #[cfg(test)]
 mod vmess_encoding_test;
+
+#[cfg(test)]
+mod reference_test;
+#[cfg(test)]
+mod native_test;

@@ -63,6 +63,7 @@ pub fn marshal_command(cmd_id: u8, payload: &[u8]) -> Result<Vec<u8>> {
 pub fn unmarshal_command(data: &[u8]) -> Result<(u8, Vec<u8>)> {
     if data.len() < 6 { return Err(Error::Protocol("Insufficient length for command frame".into())); }
     let total_len = data[1] as usize;
+    if total_len < 4 { return Err(Error::Protocol("Insufficient command checksum length".into())); }
     if data.len() < 2 + total_len { return Err(Error::Protocol("Truncated command payload".into())); }
     let payload = &data[6..2 + total_len];
     if u32::from_be_bytes([data[2], data[3], data[4], data[5]]) != authenticate(payload) {

@@ -30,19 +30,21 @@ mod tests {
         header.encode(&mut buf).await.unwrap();
 
         let mut cursor = Cursor::new(buf);
-        let decoded = RequestHeader::decode(&mut cursor).await.unwrap();
+        let validator = crate::proxy::vmess::validator::MemoryValidator::new();
+        validator.add(crate::common::protocol::User::new(user_id)).unwrap();
+        let decoded = RequestHeader::decode(&mut cursor, &validator).await.unwrap();
 
         assert_eq!(decoded.command, RequestCommand::Tcp);
         assert_eq!(decoded.destination, target);
         assert_eq!(decoded.request_body_iv, header.request_body_iv);
         assert_eq!(decoded.request_body_key, header.request_body_key);
 
-        let resp = ResponseHeader::new(0x37);
+        let resp = ResponseHeader::new(header.response_header_byte);
         let mut resp_buf = Vec::new();
-        resp.encode(&mut resp_buf).await.unwrap();
+        resp.encode(&mut resp_buf, &header).await.unwrap();
 
         let mut resp_cursor = Cursor::new(resp_buf);
-        let dec_resp = ResponseHeader::decode(&mut resp_cursor).await.unwrap();
-        assert_eq!(dec_resp.response_header_byte, 0x37);
+        let dec_resp = ResponseHeader::decode(&mut resp_cursor, &header).await.unwrap();
+        assert_eq!(dec_resp.response_header_byte, header.response_header_byte);
     }
 }
