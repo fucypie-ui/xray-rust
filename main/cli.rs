@@ -3,6 +3,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use super::commands::all::tls::{cert::CertOptions, ping::PingOptions};
+use super::commands::all::{mlkem768::Mlkem768Options, x25519::X25519Options};
 
 #[derive(Parser, Debug)]
 #[command(name = "xray", version, about = "Xray Core in Rust")]
@@ -32,7 +33,10 @@ pub enum Commands {
         #[arg(short = 'i', long = "i", default_value = "", allow_hyphen_values = true)]
         input: String,
     },
-    X25519,
+    #[command(args_override_self = true)]
+    X25519(X25519Options),
+    #[command(args_override_self = true)]
+    Mlkem768(Mlkem768Options),
     Tls {
         #[command(subcommand)]
         subcmd: TlsCommands,
@@ -78,7 +82,7 @@ pub fn normalize_go_flags(args: impl IntoIterator<Item = OsString>) -> Vec<OsStr
             let takes_value = matches!(name, "config" | "c" | "i" | "domain" | "name" | "org" | "file" | "expire" | "ip" | "timeout" | "server" | "s" | "t");
             needs_value = text.starts_with('-') && takes_value && !text.contains('=');
             if text.starts_with('-') && !text.starts_with("--")
-                && matches!(name, "config" | "domain" | "name" | "org" | "file" | "expire" | "ip" | "timeout" | "server" | "ca" | "json" | "test")
+                && matches!(name, "config" | "domain" | "name" | "org" | "file" | "expire" | "ip" | "timeout" | "server" | "ca" | "json" | "test" | "std-encoding")
             {
                 OsString::from(format!("-{text}"))
             } else {
@@ -100,6 +104,21 @@ mod tests {
     #[test]
     fn cli_definition_is_consistent() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn key_commands_reach_the_shared_options_with_go_flags() {
+        for flag in ["-std-encoding", "--std-encoding"] {
+            let cli = parse(&["xray", "x25519", "-i", "old", flag, "--i", "-new"]).unwrap();
+            let Some(Commands::X25519(options)) = cli.command else { panic!("expected x25519") };
+            assert_eq!(options.input, "-new");
+            assert!(options.std_encoding);
+        }
+        let cli = parse(&["xray", "mlkem768", "-i=old", "--i", "-seed"]).unwrap();
+        let Some(Commands::Mlkem768(options)) = cli.command else { panic!("expected mlkem768") };
+        assert_eq!(options.input, "-seed");
+        assert!(parse(&["xray", "x25519", "--std-encoding=maybe"]).is_err());
+        assert!(parse(&["xray", "mlkem768", "--i"]).is_err());
     }
 
     #[test]

@@ -8,6 +8,7 @@ use xray_core::infra::conf::Config;
 use xray_core::main::cli::{Cli, Commands, TlsCommands, normalize_go_flags};
 use xray_core::main::commands::all::tls::{cert::execute_cert, ping::execute_ping};
 use xray_core::main::commands::all::uuid::generate_uuid;
+use xray_core::main::commands::all::{mlkem768::execute_mlkem768, x25519::execute_x25519};
 
 fn resolve_path(config_path: &PathBuf) -> PathBuf {
     if config_path.exists() {
@@ -51,13 +52,8 @@ async fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Version) => println!("Xray-core {} (Rust)", env!("CARGO_PKG_VERSION")),
         Some(Commands::Uuid { input }) => println!("{}", generate_uuid(&input)?),
-        Some(Commands::X25519) => {
-            use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-            let secret = x25519_dalek::StaticSecret::random_from_rng(rand::rngs::OsRng);
-            let public = x25519_dalek::PublicKey::from(&secret);
-            println!("Private Key: {}", URL_SAFE_NO_PAD.encode(secret.to_bytes()));
-            println!("Public Key:  {}", URL_SAFE_NO_PAD.encode(public.as_bytes()));
-        }
+        Some(Commands::X25519(options)) => println!("{}", execute_x25519(&options)?),
+        Some(Commands::Mlkem768(options)) => println!("{}", execute_mlkem768(&options)?),
         Some(Commands::Tls { subcmd }) => {
             let output = match subcmd {
                 TlsCommands::Ping(options) => execute_ping(&options).await?,
@@ -125,6 +121,10 @@ mod tests {
         assert_eq!(find_config_path(&cli), Some(PathBuf::from("custom.json")));
         let cli = Cli::try_parse_from(["xray", "uuid"]).unwrap();
         assert_eq!(find_config_path(&cli), None);
+        for command in ["x25519", "mlkem768"] {
+            let cli = Cli::try_parse_from(["xray", command, "-i", "seed"]).unwrap();
+            assert_eq!(find_config_path(&cli), None);
+        }
         let cli = Cli::try_parse_from(["xray"]).unwrap();
         assert_eq!(find_config_path(&cli), Some(PathBuf::from("config.json")));
     }
