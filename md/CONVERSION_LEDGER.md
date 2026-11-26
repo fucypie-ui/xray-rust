@@ -1,5 +1,7 @@
 # Xray 844 个 Go 源码文件 1:1 转换进度台账 (CONVERSION_LEDGER.md)
 
+> **Historical mapping, not a conformance result:** The completed markers below have not all been independently verified against the Go implementation. See [PORTING_STATUS.md](PORTING_STATUS.md) for the current parity audit and test evidence.
+
 > 基准对照文件：ALL_GO_FILES.txt（包含且仅包含原版 Xray-core 全量 844 个 Go 文件，已严格锁定）。
 > 规则：严禁虚标空壳桩代码，每一个被标记为 ✅ 转换成功的文件必须拥有真实的 Rust 业务逻辑与单元测试验证。
 

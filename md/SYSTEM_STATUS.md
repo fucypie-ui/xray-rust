@@ -1,5 +1,7 @@
 # Xray-Rust 全模块重构系统状态与 1:1 文件清单 (SYSTEM_STATUS.md)
 
+> **Historical, unverified status:** The completion percentages and test counts below predate the current parity audit. File coverage and passing round-trip tests do not establish Xray-core compatibility. Use [PORTING_STATUS.md](PORTING_STATUS.md) for the current evidence and confirmed gaps.
+
 > [!CAUTION]
 > **开发准则（永久生效）**：
 > 1. **严禁在未完成全部子模块前宣称“全部重构完成”**。

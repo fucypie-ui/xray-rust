@@ -1,5 +1,7 @@
 # Xray 1:1 真实重构与已转化文件清单 (CONVERTED_VERIFIED.md)
 
+> **Historical, unverified inventory:** The 100% claims and line counts below are not current compatibility evidence. See [PORTING_STATUS.md](PORTING_STATUS.md) for the current status and confirmed gaps.
+
 > **质量审查说明**：严格杜绝任何 pub struct XxxService 等只有几行的空壳骨架代码。只有拥有完整实质业务逻辑与测试覆盖的文件才在此登记为真实转化成功。
 
 ### 实时统计数据

@@ -1,5 +1,7 @@
 # Xray 源码 1:1 真实重构与文件转换追踪日志 (CONVERTED_FILES.md)
 
+> **Historical conversion notes:** Entries below describe previous work and may overstate compatibility. See [PORTING_STATUS.md](PORTING_STATUS.md) for current source comparisons, verification, and open gaps.
+
 > 本文件记录每一个真实完成重构、拥有实际逻辑、状态机与单测验证的 Go -> Rust 文件对应清单。
 > 严禁空壳桩代码，每一个记录项必须具备真实代码实现与单元测试。
 

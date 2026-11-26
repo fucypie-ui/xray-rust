@@ -1,6 +1,8 @@
 # xray-rs
 
-High-performance Rust 1:1 implementation of [Xray-core](https://github.com/XTLS/Xray-core).
+An in-progress Rust port of [Xray-core](https://github.com/XTLS/Xray-core), targeting compatible behavior and wire formats.
+
+**Porting status:** Full 1:1 compatibility has not been established. The feature list below describes the porting scope, not a conformance guarantee. See [the current parity report](md/PORTING_STATUS.md) for verified work, CI coverage, and remaining gaps.
 
 ## Features
 

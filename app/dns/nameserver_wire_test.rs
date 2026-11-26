@@ -37,9 +37,13 @@ fn answer(query: &[u8], records: &[(u16, u32, &[u8])]) -> Vec<u8> {
 #[test]
 fn dns_wire_go_cname_ttl_limits_address_ttl() {
     // dnscommon.go parseResponse uses every answer TTL, including CNAMEs.
-    let query = build_dns_query_typed("example.com", 1);
-    let response = answer(&query, &[(5, 7, &[0xc0, 0x0c]), (1, 300, &[8, 8, 8, 8])]);
-    let (ips, ttl) = parse_dns_response_with_ttl(&response, "EXAMPLE.COM.").unwrap();
+    let query = build_dns_query_typed("www.example.com", 1);
+    // www.example.com CNAME example.com; example.com A 8.8.8.8.
+    // Offset 16 points past the initial www label to example.com.
+    let mut response = answer(&query, &[(5, 7, &[0xc0, 0x10]), (1, 300, &[8, 8, 8, 8])]);
+    let address_owner = query.len() + 14;
+    response[address_owner..address_owner + 2].copy_from_slice(&[0xc0, 0x10]);
+    let (ips, ttl) = parse_dns_response_with_ttl(&response, "WWW.EXAMPLE.COM.").unwrap();
     assert_eq!(ips, vec!["8.8.8.8".parse::<IpAddr>().unwrap()]);
     assert_eq!(ttl, 7);
 }
