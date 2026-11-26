@@ -1,0 +1,15 @@
+{
+  "workflow_run": 45892518463,
+  "job_id": 140158378278,
+  "artifact_id": 15152217167,
+  "source_commit": "67756b3674d56b72c7a7e675e8dcd3f883e1b2f7",
+  "generator_commit": "584cd1332f414592687c552452bad634cef989cc",
+  "go_version": "go version go1.27.4 linux/amd64",
+  "fixture_sha256": "349343ccb3730746d51afa5bfef25470d7184fccc9476eeeb8343c81278fb9b0",
+  "records": 3,
+  "generators": [
+    "testing/ss2022-reference/generate.sh",
+    "testing/ss2022-reference/generate-extended.sh"
+  ],
+  "scope": "Independent pinned-Go TCP ChaCha20/AES identity chains and UDP request/response bytes; no live Rust interoperability result."
+}
