@@ -33,7 +33,11 @@ pub struct Buffer {
 }
 
 impl Default for Buffer {
-    fn default() -> Self { Self { per_connection: 512 * 1024, } }
+    fn default() -> Self {
+        let value = std::env::var("xray.ray.buffer.size").ok()
+            .or_else(|| std::env::var("XRAY_RAY_BUFFER_SIZE").ok());
+        Self { per_connection: buffer_size_from_env(value.as_deref()) }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -69,3 +73,16 @@ pub trait PolicyManager: Feature {
 }
 
 pub fn manager_type() -> &'static str { TYPE_POLICY_MANAGER }
+
+/// Match Go's signed 32-bit MiB environment flag and architecture defaults.
+pub fn buffer_size_from_env(value: Option<&str>) -> i32 {
+    match value.and_then(|value| value.parse::<i32>().ok()).unwrap_or(-17) {
+        0 => -1,
+        -17 => {
+            if cfg!(any(target_arch = "arm", target_arch = "mips")) { 0 }
+            else if cfg!(any(target_arch = "aarch64", target_arch = "mips64")) { 4 * 1024 }
+            else { 512 * 1024 }
+        }
+        size => size.wrapping_mul(1024 * 1024),
+    }
+}

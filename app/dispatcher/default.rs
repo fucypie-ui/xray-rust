@@ -331,11 +331,9 @@ impl DefaultDispatcher {
             drop(initial_payload);
         }
         let level = session.user.as_ref().map(|u| u.level).unwrap_or(0);
-        let timeouts = self
-            .policy
-            .as_ref()
-            .map(|m| m.for_level(level).timeouts)
-            .unwrap_or_else(|| crate::features::policy::session_default().timeouts);
+        let session_policy = self.policy.as_ref().map(|manager| manager.for_level(level))
+            .unwrap_or_else(crate::features::policy::session_default);
+        let timeouts = session_policy.timeouts;
         let (uplink_counter, downlink_counter, online_map, user_ip) = match (&session.user, &self.policy, &self.stats) {
             (Some(user), Some(policy_mgr), Some(stats_mgr)) if !user.email.is_empty() => {
                 let p = policy_mgr.for_level(user.level);
@@ -367,11 +365,13 @@ impl DefaultDispatcher {
             bypassed: debug_bypass,
             connect_start: debug_connect_start,
         });
+        let _online_guard = OnlineGuard { map: online_map, ip: user_ip };
         let (out_up_counter, out_down_counter) = if let Some(stats_mgr) = &self.stats {
-            let up = stats_mgr.register_counter(&format!("outbound>>>{}>>>traffic>>>uplink", outbound_tag));
-            let down = stats_mgr.register_counter(&format!("outbound>>>{}>>>traffic>>>downlink", outbound_tag));
-            if initial_len > 0 { up.add(initial_len as i64); }
-            (Some(up), Some(down))
+            let policy = self.policy.as_ref().map(|manager| manager.for_system()).unwrap_or_default();
+            let up = policy.stats.outbound_uplink.then(|| stats_mgr.register_counter(&format!("outbound>>>{}>>>traffic>>>uplink", outbound_tag)));
+            let down = policy.stats.outbound_downlink.then(|| stats_mgr.register_counter(&format!("outbound>>>{}>>>traffic>>>downlink", outbound_tag)));
+            if initial_len > 0 && let Some(counter) = &up { counter.add(initial_len as i64); }
+            (up, down)
         } else {
             (None, None)
         };
@@ -380,6 +380,7 @@ impl DefaultDispatcher {
             &mut inbound_stream,
             &mut outbound_stream,
             timeouts,
+            session_policy.buffer.per_connection,
             out_up_counter,
             out_down_counter,
             uplink_counter,
@@ -392,6 +393,7 @@ impl DefaultDispatcher {
             &mut inbound_stream,
             &mut outbound_stream,
             timeouts,
+            session_policy.buffer.per_connection,
             out_up_counter,
             out_down_counter,
             uplink_counter,
@@ -425,7 +427,6 @@ impl DefaultDispatcher {
                 debug!("Stream relay ended for {}: {}", session.destination, e);
             }
         }
-        if let (Some(om), Some(ip)) = (&online_map, &user_ip) { om.remove_ip(ip); }
         Ok(())
     }
 }
@@ -492,9 +493,10 @@ struct DebugTapMeta {
 }
 
 async fn copy_one_dir<R, W>(
-    reader: R,
-    writer: W,
+    mut reader: R,
+    mut writer: W,
     activity_tx: tokio::sync::mpsc::Sender<()>,
+    buffer_size: usize,
     counter: Option<Arc<crate::features::stats::Counter>>,
     user_counter: Option<Arc<crate::features::stats::Counter>>,
     #[cfg(debug_assertions)] tap: Option<(DebugTapMeta, crate::debug_panel::Direction)>,
@@ -505,7 +507,7 @@ where
 {
     #[cfg(debug_assertions)]
     let mut ttfb_recorded = false;
-    crate::common::buf::copy::copy_one_way(reader, writer, activity_tx, counter, move |_chunk| {
+    let mut on_chunk = move |_chunk: &[u8]| {
         if let Some(c) = &user_counter { c.add(_chunk.len() as i64); }
         #[cfg(debug_assertions)]
         if let Some((ref meta, dir)) = tap {
@@ -541,8 +543,26 @@ where
                 _chunk,
             );
         }
-    })
-    .await
+    };
+    let mut buffer = vec![0u8; buffer_size];
+    let mut total = 0u64;
+    loop {
+        let n = reader.read(&mut buffer).await?;
+        if n == 0 { writer.flush().await?; writer.shutdown().await?; return Ok(total); }
+        if let Some(counter) = &counter { counter.add(n as i64); }
+        let _ = activity_tx.try_send(());
+        on_chunk(&buffer[..n]);
+        writer.write_all(&buffer[..n]).await?;
+        total += n as u64;
+    }
+}
+
+struct OnlineGuard {
+    map: Option<Arc<dyn crate::features::stats::OnlineMap>>,
+    ip: Option<String>,
+}
+impl Drop for OnlineGuard {
+    fn drop(&mut self) { if let (Some(map), Some(ip)) = (&self.map, &self.ip) { map.remove_ip(ip); } }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -550,6 +570,7 @@ async fn copy_bidirectional_with_timeout<A, B>(
     a: &mut A,
     b: &mut B,
     timeouts: crate::features::policy::Timeout,
+    buffer_limit: i32,
     up_counter: Option<Arc<crate::features::stats::Counter>>,
     down_counter: Option<Arc<crate::features::stats::Counter>>,
     user_up_counter: Option<Arc<crate::features::stats::Counter>>,
@@ -560,7 +581,9 @@ where
     A: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + ?Sized,
     B: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + ?Sized,
 {
-    let idle_dur = if timeouts.connection_idle.is_zero() { Duration::from_secs(300) } else { timeouts.connection_idle };
+    let idle_dur = timeouts.connection_idle;
+    if idle_dur.is_zero() { return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "session idle timeout")); }
+    let buffer_size = if buffer_limit < 0 { 64 * 1024 } else if buffer_limit == 0 { 2048 } else { (buffer_limit as usize).clamp(1, 64 * 1024) };
     let (mut a_read, mut a_write) = tokio::io::split(a);
     let (mut b_read, mut b_write) = tokio::io::split(b);
     let (activity_tx, mut activity_rx) = tokio::sync::mpsc::channel::<()>(1);
@@ -579,7 +602,7 @@ where
                     None => std::future::pending::<()>().await,
                 },
                 Some(new_dur) = shrink_rx.recv() => {
-                    if !new_dur.is_zero() && new_dur < current_timeout {
+                    {
                         current_timeout = new_dur;
                         sleep.as_mut().reset(tokio::time::Instant::now() + current_timeout);
                     }
@@ -596,20 +619,20 @@ where
             ));
             let fut_a = async {
                 #[cfg(debug_assertions)]
-                let r = copy_one_dir(&mut a_read, &mut b_write, activity_tx, up_counter, user_up_counter, tap_a).await;
+                let r = copy_one_dir(&mut a_read, &mut b_write, activity_tx, buffer_size, up_counter, user_up_counter, tap_a).await;
                 #[cfg(not(debug_assertions))]
-                let r = copy_one_dir(&mut a_read, &mut b_write, activity_tx, up_counter, user_up_counter).await;
-                if r.is_ok() && !timeouts.downlink_only.is_zero() {
+                let r = copy_one_dir(&mut a_read, &mut b_write, activity_tx, buffer_size, up_counter, user_up_counter).await;
+                if r.is_ok() {
                     let _ = shrink_tx.try_send(timeouts.downlink_only);
                 }
                 r
             };
             let fut_b = async {
                 #[cfg(debug_assertions)]
-                let r = copy_one_dir(&mut b_read, &mut a_write, activity_tx_b, down_counter, user_down_counter, tap_b).await;
+                let r = copy_one_dir(&mut b_read, &mut a_write, activity_tx_b, buffer_size, down_counter, user_down_counter, tap_b).await;
                 #[cfg(not(debug_assertions))]
-                let r = copy_one_dir(&mut b_read, &mut a_write, activity_tx_b, down_counter, user_down_counter).await;
-                if r.is_ok() && !timeouts.uplink_only.is_zero() {
+                let r = copy_one_dir(&mut b_read, &mut a_write, activity_tx_b, buffer_size, down_counter, user_down_counter).await;
+                if r.is_ok() {
                     let _ = shrink_tx_b.try_send(timeouts.uplink_only);
                 }
                 r

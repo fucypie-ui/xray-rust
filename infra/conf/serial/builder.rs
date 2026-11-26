@@ -8,21 +8,14 @@ pub fn build_json_config(raw_json: &str) -> Result<Value> {
 
 pub fn merge_configs(configs: &[Config]) -> Config {
     let mut merged = Config::default();
-    for c in configs {
-        if let Some(ref l) = c.log { merged.log = Some(l.clone()); }
-        if let Some(ref d) = c.dns { merged.dns = Some(d.clone()); }
-        if let Some(ref r) = c.routing { merged.routing = Some(r.clone()); }
-        merged.inbounds.extend(c.inbounds.clone());
-        merged.outbounds.extend(c.outbounds.clone());
-    }
+    for config in configs { merged.override_with(config.clone(), "tail"); }
     merged
 }
 
 pub fn build_config_from_slices(raw_jsons: &[&str]) -> Result<Config> {
     let mut configs = Vec::new();
     for raw in raw_jsons {
-        let conf: Config = serde_json::from_str(raw)
-            .map_err(|e| Error::Config(format!("Failed to parse config: {}", e)))?;
+        let conf: Config = crate::core::config::load_config("json", raw.as_bytes())?;
         configs.push(conf);
     }
     Ok(merge_configs(&configs))

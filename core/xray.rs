@@ -83,11 +83,15 @@ impl Instance {
     pub fn new_with_context(config: Config) -> Result<Self> { Self::from_config(config) }
     pub fn from_config(config: Config) -> Result<Self> {
         let built = config.build()?;
-        let stats_manager = Arc::new(DefaultStatsManager::new());
-        let dispatcher = Arc::new(
-            DefaultDispatcher::new(built.outbounds, Arc::new(built.router)).with_stats(stats_manager.clone()),
-        );
-        let features: Vec<Arc<dyn Feature>> = vec![dispatcher.clone(), stats_manager.clone()];
+        let stats_manager = built.stats_manager.clone();
+        let mut dispatcher = DefaultDispatcher::new(built.outbounds, Arc::new(built.router))
+            .with_policy(built.policy_manager);
+        if built.stats_enabled { dispatcher = dispatcher.with_stats(stats_manager.clone()); }
+        if let Some(tag) = built.default_outbound_tag { dispatcher = dispatcher.with_default_outbound(tag); }
+        if let Some(fake_dns) = built.fake_dns { dispatcher = dispatcher.with_fakedns(fake_dns); }
+        let dispatcher = Arc::new(dispatcher);
+        let mut features = built.features;
+        features.push(dispatcher.clone());
         Ok(Self {
             dispatcher,
             inbound_manager: InboundManager::new(built.inbounds),

@@ -12,30 +12,33 @@ use crate::features::policy::{
 pub struct Instance {
     levels: HashMap<u32, Policy>,
     system: Option<SystemPolicy>,
+    defaults: SessionPolicy,
 }
 
 impl Instance {
-    pub fn new(config: &Config) -> Result<Self> {
+    pub fn new(config: &Config) -> Result<Self> { Self::with_defaults(config, session_default()) }
+    pub fn with_defaults(config: &Config, defaults: SessionPolicy) -> Result<Self> {
         let mut levels = HashMap::new();
         for (&lv, p) in &config.level {
             let mut pp = default_policy();
+            pp.buffer = Some(super::config_pb::PolicyBuffer { connection: defaults.buffer.per_connection });
             pp.override_with(p);
             levels.insert(lv, pp);
         }
         Ok(Self {
             levels,
             system: config.system.clone(),
+            defaults,
         })
     }
     pub fn for_level(&self, level: u32) -> SessionPolicy {
         if let Some(p) = self.levels.get(&level) { return p.to_core_policy(); }
-        session_default()
+        self.defaults.clone()
     }
     pub fn for_system(&self) -> CoreSystemPolicy {
-        match &self.system {
-            Some(s) => s.to_core_policy(),
-            None => CoreSystemPolicy::default(),
-        }
+        let mut policy = self.system.as_ref().map(SystemPolicy::to_core_policy).unwrap_or_default();
+        policy.buffer = self.defaults.buffer.clone();
+        policy
     }
 }
 

@@ -40,9 +40,9 @@ impl ConfigFormat {
 static LOADERS_BY_NAME: LazyLock<RwLock<HashMap<String, ConfigLoader>>> = LazyLock::new(|| {
     let mut map = HashMap::new();
     map.insert(CONFIG_FORMAT_JSON.to_string(), json_loader as ConfigLoader);
-    map.insert(CONFIG_FORMAT_YAML.to_string(), json_loader as ConfigLoader);
-    map.insert(CONFIG_FORMAT_TOML.to_string(), json_loader as ConfigLoader);
-    map.insert(CONFIG_FORMAT_PROTOBUF.to_string(), json_loader as ConfigLoader);
+    map.insert(CONFIG_FORMAT_YAML.to_string(), yaml_loader as ConfigLoader);
+    map.insert(CONFIG_FORMAT_TOML.to_string(), toml_loader as ConfigLoader);
+    map.insert(CONFIG_FORMAT_PROTOBUF.to_string(), crate::infra::conf::native::decode_config as ConfigLoader);
     RwLock::new(map)
 });
 
@@ -59,23 +59,48 @@ static LOADERS_BY_EXT: LazyLock<RwLock<HashMap<String, String>>> = LazyLock::new
 });
 
 fn json_loader(data: &[u8]) -> Result<Config> {
-    let s = std::str::from_utf8(data).map_err(|e| Error::Config(format!("Invalid UTF-8 in config: {}", e)))?;
-    serde_json::from_str(s).map_err(|e| Error::Config(format!("Failed to parse JSON config: {}", e)))
+    // Local Go configs permit Java and Python style comments. Keep serde_json
+    // responsible for JSON grammar, numbers, escapes and diagnostic positions.
+    let reader = json_comments::StripComments::new(data);
+    let mut decoder = serde_json::Deserializer::from_reader(reader);
+    serde::Deserialize::deserialize(&mut decoder)
+        .map_err(|error| Error::Config(format!("failed to read config file at line {} char {}: {}", error.line(), error.column(), error)))
+}
+
+fn yaml_loader(data: &[u8]) -> Result<Config> {
+    let value: serde_json::Value = serde_yaml_ng::from_slice(data)
+        .map_err(|error| Error::Config(format!("failed to convert yaml to json: {}", error)))?;
+    serde_json::from_value(value).map_err(|error| Error::Config(format!("failed to read config file: {}", error)))
+}
+
+fn toml_loader(data: &[u8]) -> Result<Config> {
+    let text = std::str::from_utf8(data)
+        .map_err(|error| Error::Config(format!("failed to read config file: {}", error)))?;
+    let value: toml::Value = toml::from_str(text)
+        .map_err(|error| Error::Config(format!("failed to convert toml to map: {}", error)))?;
+    let value = serde_json::to_value(value)
+        .map_err(|error| Error::Config(format!("failed to convert map to json: {}", error)))?;
+    serde_json::from_value(value).map_err(|error| Error::Config(format!("failed to read config file: {}", error)))
 }
 
 pub fn register_config_loader(format: ConfigFormat) -> Result<()> {
     let name = format.name.to_lowercase();
     let mut names = LOADERS_BY_NAME.write().map_err(|_| Error::Config("Loader lock poisoned".into()))?;
-    if names.contains_key(&name) { return Err(Error::Config(format!("{} already registered.", format.name))); }
-    names.insert(name.clone(), format.loader);
     let mut exts = LOADERS_BY_EXT.write().map_err(|_| Error::Config("Loader lock poisoned".into()))?;
-    for ext in format.extensions {
-        let lext = ext.to_lowercase();
-        if let Some(existing) = exts.get(&lext) {
-            return Err(Error::Config(format!("{} already registered to {}", ext, existing)));
+    if names.contains_key(&name) { return Err(Error::Config(format!("{} already registered.", format.name))); }
+    let extensions: Vec<_> = format.extensions.iter().map(|ext| ext.to_lowercase()).collect();
+    // Validate the entire registration before changing either registry.
+    let mut seen = std::collections::HashSet::new();
+    for extension in &extensions {
+        if !seen.insert(extension.clone()) {
+            return Err(Error::Config(format!("{} already registered to {}", extension, name)));
         }
-        exts.insert(lext, name.clone());
+        if let Some(existing) = exts.get(extension) {
+            return Err(Error::Config(format!("{} already registered to {}", extension, existing)));
+        }
     }
+    names.insert(name.clone(), format.loader);
+    for extension in extensions { exts.insert(extension, name.clone()); }
     Ok(())
 }
 
@@ -88,13 +113,7 @@ pub fn get_extension(filename: &str) -> String {
 }
 
 pub fn get_format_by_extension(ext: &str) -> String {
-    match ext.to_lowercase().as_str() {
-        "pb" | "protobuf" => "protobuf".to_string(),
-        "yaml" | "yml" => "yaml".to_string(),
-        "toml" => "toml".to_string(),
-        "json" | "jsonc" => "json".to_string(),
-        _ => String::new(),
-    }
+    LOADERS_BY_EXT.read().ok().and_then(|extensions| extensions.get(&ext.to_lowercase()).cloned()).unwrap_or_default()
 }
 
 pub fn get_format(filename: &str) -> String { get_format_by_extension(&get_extension(filename)) }
@@ -105,32 +124,30 @@ pub fn load_config(format_name: &str, data: &[u8]) -> Result<Config> {
     } else {
         format_name
     };
-    let guard = LOADERS_BY_NAME.read().map_err(|_| Error::Config("Config loader lock poisoned".into()))?;
-    let loader = guard
+    let loader = *LOADERS_BY_NAME.read()
+        .map_err(|_| Error::Config("Config loader lock poisoned".into()))?
         .get(&fmt.to_lowercase()).ok_or_else(|| Error::Config(format!("Unsupported config format: {}", format_name)))?;
+    // Registered loaders may themselves invoke the registry.
     loader(data)
 }
 
 pub fn get_merged_config(files: &[ConfigSource]) -> Result<String> {
-    let (mut merged, mut inbs, mut outbs) = (serde_json::Map::new(), Vec::new(), Vec::new());
-    for src in files {
-        if let Ok(s) = std::fs::read_to_string(&src.name)
-            && let Ok(serde_json::Value::Object(obj)) = serde_json::from_str(&s)
-        {
-            for (k, v) in obj {
-                match (k.as_str(), v) {
-                    ("inbounds", serde_json::Value::Array(a)) => inbs.extend(a),
-                    ("outbounds", serde_json::Value::Array(a)) => outbs.extend(a),
-                    ("inbounds" | "outbounds", _) => {}
-                    (_, v) => { merged.insert(k, v); }
-                }
-            }
-        }
+    let mut merged = Config::default();
+    for source in files {
+        let format = if source.format.is_empty() || source.format == "auto" {
+            get_format(&source.name)
+        } else { source.format.clone() };
+        let bytes = std::fs::read(&source.name)
+            .map_err(|error| Error::Config(format!("failed to read config file {}: {}", source.name, error)))?;
+        let config = load_config(&format, &bytes)?;
+        merged.override_with(config, &source.name);
     }
-    if !inbs.is_empty() { merged.insert("inbounds".into(), serde_json::Value::Array(inbs)); }
-    if !outbs.is_empty() { merged.insert("outbounds".into(), serde_json::Value::Array(outbs)); }
-    serde_json::to_string(&serde_json::Value::Object(merged))
-        .map_err(|e| Error::Config(format!("Failed to serialize merged config: {}", e)))
+    serde_json::to_string(&merged)
+        .map_err(|error| Error::Config(format!("Failed to serialize merged config: {}", error)))
 }
+
+#[cfg(test)]
+#[path = "config_test.rs"]
+mod tests;
 
 pub use crate::infra::conf::Config as CoreConfig;

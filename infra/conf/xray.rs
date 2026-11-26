@@ -7,14 +7,16 @@ pub struct ConfigLoader;
 
 impl ConfigLoader {
     pub fn load_from_json_str(json_str: &str) -> Result<Config> {
-        serde_json::from_str::<Config>(json_str).map_err(|e| Error::Config(format!("JSON parsing error: {}", e)))
+        crate::core::config::load_config("json", json_str.as_bytes())
     }
     pub fn load_from_json_value(val: Value) -> Result<Config> {
         serde_json::from_value::<Config>(val).map_err(|e| Error::Config(format!("JSON value conversion error: {}", e)))
     }
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Config> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| Error::Config(format!("Failed to read config file: {}", e)))?;
-        Self::load_from_json_str(&content)
+        let path = path.as_ref();
+        let content = std::fs::read(path)
+            .map_err(|error| Error::Config(format!("Failed to read config file: {}", error)))?;
+        let format = crate::core::config::get_format(&path.to_string_lossy());
+        crate::core::config::load_config(&format, &content)
     }
 }

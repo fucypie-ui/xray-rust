@@ -1,6 +1,5 @@
 use super::policy::{PolicyManager, SessionPolicy, SystemPolicy, session_default};
 use crate::features::feature::{Feature, TYPE_POLICY_MANAGER};
-use std::time::Duration;
 
 #[derive(Default, Clone, Debug)]
 pub struct DefaultManager;
@@ -14,11 +13,7 @@ impl Feature for DefaultManager {
 }
 
 impl PolicyManager for DefaultManager {
-    fn for_level(&self, level: u32) -> SessionPolicy {
-        let mut p = session_default();
-        if level == 1 { p.timeouts.connection_idle = Duration::from_secs(600); }
-        p
-    }
+    fn for_level(&self, _level: u32) -> SessionPolicy { session_default() }
     fn for_system(&self) -> SystemPolicy { SystemPolicy::default() }
 }
 
