@@ -1,5 +1,10 @@
 pub mod config;
 pub mod reality;
+mod certificate;
+mod hello;
+mod hooks;
+mod kx;
+mod stream;
 
 #[cfg(test)]
 pub mod reality_test;
@@ -10,3 +15,5 @@ pub use reality::{RealityAuthSession, RealityClient, RealityServer, derive_auth_
 mod scen_reality_test;
 #[cfg(test)]
 mod config_test;
+#[cfg(test)]
+mod go_peer_test;

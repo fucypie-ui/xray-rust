@@ -121,7 +121,17 @@ impl DialParams {
             crate::common::net::Address::Domain(d) => d.as_str(),
             _ => "localhost",
         });
-        let stream = if let Some(tls) = &self.tls_client {
+        let stream = if let Some(reality) = &self.reality_client {
+            #[cfg(debug_assertions)]
+            let _t0 = std::time::Instant::now();
+            let stream = reality.connect(tcp_stream).await?;
+            #[cfg(debug_assertions)]
+            {
+                crate::debug_panel::record_stage("VLESS REALITY authentication", _t0.elapsed());
+                trace_step("4. 外层 TLS 握手 (RTT 2)", _t0, format!("REALITY SNI={}", reality.server_name));
+            }
+            stream
+        } else if let Some(tls) = &self.tls_client {
             let (target_sni, is_reality) = match &self.reality_client {
                 Some(r) => (r.server_name.as_str(), true),
                 None => (sni, false),
