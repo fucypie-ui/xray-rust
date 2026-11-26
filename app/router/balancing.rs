@@ -82,7 +82,7 @@ impl BalancingStrategy for RoundRobinStrategy {
         if tags.is_empty() { return self.fallback_tag.clone(); }
         // Go wraps the index after every pick using that call's pool size.
         // Keeping an unbounded counter changes picks when the pool changes.
-        let cur = self.index.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |index| {
+        let cur = self.index.try_update(Ordering::Relaxed, Ordering::Relaxed, |index| {
             Some((index % tags.len() + 1) % tags.len())
         }).expect("round-robin update always succeeds");
         let selected = &tags[cur % tags.len()];
