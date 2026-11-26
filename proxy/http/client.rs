@@ -1,17 +1,20 @@
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use super::PrefixedStream;
 use crate::common::errors::{Error, Result};
 use crate::common::net::{BoxStream, Destination};
 use crate::common::protocol::SessionContext;
 use crate::features::outbound::OutboundHandler;
+use crate::transport::internet::dialer::Dialer;
 use crate::transport::internet::system_dialer::SystemDialer;
 
 pub struct HttpClient {
     tag: String,
     server: Destination,
+    dialer: Option<Arc<dyn Dialer>>,
     auth: Option<String>,
 }
 
@@ -20,6 +23,7 @@ impl HttpClient {
         Self {
             tag: tag.into(),
             server,
+            dialer: None,
             auth: None,
         }
     }
@@ -30,7 +34,13 @@ impl HttpClient {
             tag: tag.into(),
             server,
             auth: Some(auth_header),
+            dialer: None,
         }
+    }
+
+    pub fn with_dialer(mut self, dialer: Arc<dyn Dialer>) -> Self {
+        self.dialer = Some(dialer);
+        self
     }
 }
 
@@ -38,7 +48,10 @@ impl HttpClient {
 impl OutboundHandler for HttpClient {
     fn tag(&self) -> &str { &self.tag }
     async fn connect(&self, session: &SessionContext) -> Result<BoxStream> {
-        let mut stream = SystemDialer::dial_tcp(&self.server).await?;
+        let mut stream: BoxStream = match &self.dialer {
+            Some(dialer) => dialer.dial(&self.server).await?,
+            None => Box::pin(SystemDialer::dial_tcp(&self.server).await?),
+        };
         let target = session.destination.to_string();
         let mut req = format!("CONNECT {} HTTP/1.1\r\nHost: {}\r\nProxy-Connection: Keep-Alive\r\n", target, target);
         if let Some(auth) = &self.auth { req.push_str(&format!("Proxy-Authorization: {}\r\n", auth)); }
@@ -61,7 +74,7 @@ impl OutboundHandler for HttpClient {
         if status_code != 200 {
             return Err(Error::Protocol(format!("HTTP proxy server responded with status: {}", status_code)));
         }
-        let boxed: BoxStream = Box::pin(stream);
+        let boxed: BoxStream = stream;
         if total > header_len {
             Ok(Box::pin(PrefixedStream::new(buf[header_len..total].to_vec(), boxed)))
         } else {

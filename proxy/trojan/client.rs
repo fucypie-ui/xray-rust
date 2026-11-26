@@ -5,11 +5,13 @@ use crate::common::net::{BoxStream, Destination, Network};
 use crate::common::protocol::{RequestCommand, SessionContext};
 use crate::features::outbound::OutboundHandler;
 use crate::proxy::trojan::protocol::RequestHeader;
+use crate::transport::internet::dialer::Dialer;
 use crate::transport::internet::{TcpDialer, TlsClient, WebSocketStream};
 
 pub struct Client {
     tag: String,
     server_addr: Destination,
+    dialer: Option<Arc<dyn Dialer>>,
     password: String,
     tls_client: Option<Arc<TlsClient>>,
     tls_sni: Option<String>,
@@ -28,6 +30,7 @@ impl Client {
         Self {
             tag: tag.into(),
             server_addr,
+            dialer: None,
             password: password.into(),
             tls_client: tls_client.map(Arc::new),
             tls_sni,
@@ -35,6 +38,11 @@ impl Client {
             ws_host: None,
         }
     }
+    pub fn with_dialer(mut self, dialer: Arc<dyn Dialer>) -> Self {
+        self.dialer = Some(dialer);
+        self
+    }
+
     pub fn with_websocket(mut self, path: impl Into<String>, host: Option<String>) -> Self {
         self.ws_path = Some(path.into());
         self.ws_host = host;
@@ -46,7 +54,10 @@ impl Client {
 impl OutboundHandler for Client {
     fn tag(&self) -> &str { &self.tag }
     async fn connect(&self, session: &SessionContext) -> Result<BoxStream> {
-        let tcp_stream = TcpDialer::dial(&self.server_addr).await?;
+        let tcp_stream = match &self.dialer {
+            Some(dialer) => dialer.dial(&self.server_addr).await?,
+            None => TcpDialer::dial(&self.server_addr).await?,
+        };
         let sni = self.tls_sni.as_deref().unwrap_or_else(|| match &self.server_addr.address {
             crate::common::net::Address::Domain(d) => d.as_str(),
             _ => "localhost",
@@ -73,3 +84,7 @@ impl OutboundHandler for Client {
 }
 
 pub use Client as TrojanClient;
+
+#[cfg(test)]
+#[path = "../outbound_dialer_test.rs"]
+mod outbound_dialer_test;
