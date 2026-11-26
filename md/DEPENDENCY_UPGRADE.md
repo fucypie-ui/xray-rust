@@ -81,6 +81,8 @@ The table records registry evidence, not a build-success claim. Linux resolver a
 | `Cargo.toml` / `dependencies` | `quinn-proto` (`quinn-proto`) | New dependency | `0.11.19` / `0.11.19` | 2026-09-30T09:13:59.040527Z | [crates.io API](https://crates.io/api/v1/crates/quinn-proto) |
 | `Cargo.toml` / `dependencies` | `go-parse-duration` (`go-parse-duration`) | New dependency | `0.1.1` / `0.1.1` | 2021-07-17T16:59:25.917332Z | [crates.io API](https://crates.io/api/v1/crates/go-parse-duration) |
 
+| `Cargo.toml` / `dependencies` | `shadowsocks` (`shadowsocks`) | New dependency | `1.25.0` / `=1.25.0` | 2026-08-26T18:31:08.872950Z | [crates.io API](https://crates.io/api/v1/crates/shadowsocks) |
+
 ## Migration and Linux validation
 
 The former sha-1 package was also verified: its latest stable release is 0.10.1 ([official API](https://crates.io/api/v1/crates/sha-1)). Its maintained successor sha1 0.11.0 is required for the digest 0.11 ecosystem used by HKDF 0.13. The SHA-1 algorithm and Shadowsocks subkey bytes stay unchanged. Both original and replacement registry evidence are in DEPENDENCY_UPGRADE.json.
@@ -129,3 +131,9 @@ For Linux scenario validation, df2dfcd213d81c231d1630e933451bc8a827f10e cherry-p
 The SS2022 integration adds one root dependency: `shadowsocks-crypto 0.8.0`, with default features disabled and only `v2` enabled. A fresh official registry query confirms it is the newest non-yanked stable release; the exact evidence is appended to `DEPENDENCY_UPGRADE.json`. The current manifest census is 73 direct entries / 70 unique packages. Earlier 72-entry Linux reports above remain historical evidence for their own revision.
 
 Ubuntu parity-preparation run `45893018658` at `1ea1cf2` resolved the new root lock conservatively. Its prepared manifest was byte-identical to the reviewed manifest before importing the lock at `c92390f`. The resolved crate checksum is `b404a62ebea5003f44b9a2748dee7555c5f9ae39896508e466a2a91ee6fa5df5`. This resolver pass is not a successful combined Rust compile/test claim; see `PORTING_STATUS.md` for later diagnostics and validation.
+
+## Classic Shadowsocks engine addition
+
+Official registry metadata checked 2026-11-26T21:20:44.600Z selects non-yanked stable shadowsocks 1.25.0, requiring Rust 1.91. The reviewed tagged manifest enables `aead-cipher-extra` and `security-replay-attack-detect` with default features disabled; the direct shadowsocks-crypto v2 selection remains unchanged. This reuses upstream classic AEAD/KDF and replay engines for all four pinned-Go classic methods. Source: https://github.com/shadowsocks/shadowsocks-rust/blob/v1.25.0/crates/shadowsocks/Cargo.toml .
+
+The current manifest census is 74 direct entries / 71 unique registry packages; the earlier 72-entry resolver and desktop results above remain historical. The SS2022 crypto engine was subsequently added before this classic engine. This classic addition awaits Linux lock resolution and integrated runtime tests; registry evidence is not compiler or interoperability evidence.
