@@ -2,8 +2,7 @@
 //! prost-reflect against descriptors exported from the pinned Go reference.
 //! TypedMessage.value is always protobuf, never JSON hidden in a bytes field.
 use std::sync::LazyLock;
-use prost::Message;
-use prost_reflect::{DescriptorPool, DynamicMessage, ReflectMessage, Value as ProtoValue};
+use prost_reflect::{DescriptorPool, DynamicMessage, MapKey, ReflectMessage, Value as ProtoValue};
 use serde_json::{Value, json};
 use crate::common::errors::{Error, Result};
 use super::{Config, InboundConfig, OutboundConfig};
@@ -74,7 +73,17 @@ fn proto_json(value: &ProtoValue, kind: &prost_reflect::Kind) -> Result<Value> {
                 _ => return Err(Error::Config("invalid protobuf map descriptor".into())),
             };
             let mut output = serde_json::Map::new();
-            for (key, value) in values { output.insert(key.to_string(), proto_json(value, &value_kind)?); }
+            for (key, value) in values {
+                let key = match key {
+                    MapKey::Bool(value) => value.to_string(),
+                    MapKey::I32(value) => value.to_string(),
+                    MapKey::I64(value) => value.to_string(),
+                    MapKey::U32(value) => value.to_string(),
+                    MapKey::U64(value) => value.to_string(),
+                    MapKey::String(value) => value.clone(),
+                };
+                output.insert(key, proto_json(value, &value_kind)?);
+            }
             Value::Object(output)
         }
     })

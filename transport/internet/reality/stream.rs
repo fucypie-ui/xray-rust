@@ -26,7 +26,7 @@ impl RealityStream {
     }
     pub(super) fn negotiated_h2(&self) -> bool { self.connection.alpn_protocol() == Some(b"h2") }
     pub(super) async fn handshake(mut self) -> io::Result<Self> {
-        std::future::poll_fn(|cx| {
+        std::future::poll_fn(|cx| -> Poll<io::Result<()>> {
             loop {
                 ready!(self.flush_tls(cx))?;
                 if !self.connection.is_handshaking() { return Poll::Ready(Ok(())); }

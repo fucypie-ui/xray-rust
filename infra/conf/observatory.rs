@@ -33,7 +33,7 @@ pub fn duration_ns(value: Option<&str>) -> Result<i64> {
     match value {
         None => Ok(0),
         Some(value) => go_parse_duration::parse_duration(value)
-            .map_err(|error| Error::Config(format!("invalid duration: {}", error))),
+            .map_err(|error| Error::Config(format!("invalid duration: {:?}", error))),
     }
 }
 

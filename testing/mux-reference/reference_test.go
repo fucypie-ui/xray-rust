@@ -78,8 +78,7 @@ func TestRustMuxReference(t *testing.T) {
                 "payload_hex": hex.EncodeToString(tc.payload), "global_id_hex": hex.EncodeToString(tc.global[:]),
             })
             if err != nil { t.Fatal(err) }
-            fmt.Printf("MUX_REFERENCE_VECTOR %s
-", result)
+            fmt.Println("MUX_REFERENCE_VECTOR", string(result))
         })
     }
 }

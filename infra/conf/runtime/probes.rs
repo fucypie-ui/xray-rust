@@ -34,7 +34,7 @@ impl ProbeFeature {
         let timeout = duration_ns(ping.timeout.as_deref())?;
         let timeout = if timeout <= 0 { Duration::from_secs(5) } else { Duration::from_nanos(timeout as u64) };
         let url = if ping.destination.trim().is_empty() { "https://connectivitycheck.gstatic.com/generate_204".into() } else { ping.destination.trim().into() };
-        let method = if ping.http_method.is_empty() { "HEAD".into() } else { ping.http_method.trim().into() };
+        let method: String = if ping.http_method.is_empty() { "HEAD".into() } else { ping.http_method.trim().into() };
         http::Method::from_bytes(method.as_bytes()).map_err(|error| Error::Config(format!("invalid HTTP method: {}", error)))?;
         Ok(Self { state: Arc::new(Observatory::new(url, interval, config.subject_selectors)), handlers,
             concurrent: true, method, timeout, connectivity: ping.connectivity, samples: if ping.sampling <= 0 {10} else {ping.sampling as usize},
@@ -58,18 +58,18 @@ impl Feature for ProbeFeature {
             loop {
                 let mut jobs = tokio::task::JoinSet::new();
                 for (tag, handler) in &handlers {
-                    let (state, tag, handler, method, connectivity) = (state.clone(), tag.clone(), handler.clone(), method.clone(), connectivity.clone());
+                    let (probe_state, tag, handler, method, connectivity) = (state.clone(), tag.clone(), handler.clone(), method.clone(), connectivity.clone());
                     let job = async move {
-                        let result = probe(handler, state.probe_url(), &method, timeout).await;
+                        let result = probe(handler, probe_state.probe_url(), &method, timeout).await;
                         match result {
-                            Ok(delay) => state.record_result(&tag, delay, true, None),
+                            Ok(delay) => probe_state.record_result(&tag, delay, true, None),
                             Err(error) => {
                                 // Go discards failed samples when direct connectivity is down.
                                 if !connectivity.is_empty() {
                                     let direct = Arc::new(crate::proxy::freedom::Handler::new("connectivity"));
                                     if probe(direct, &connectivity, "HEAD", timeout).await.is_err() { return; }
                                 }
-                                state.record_status(&tag, false, 99_999_999, Some(error.to_string()));
+                                probe_state.record_status(&tag, false, 99_999_999, Some(error.to_string()));
                             }
                         }
                     };
