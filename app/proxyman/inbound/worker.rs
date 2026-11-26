@@ -128,9 +128,11 @@ impl NativeInboundListener for SniffingListener {
 pub struct KcpInboundHandler {
     inner: Arc<dyn InboundHandler>,
     config: crate::transport::internet::kcp::KcpConfig,
+    codec: Option<Arc<dyn crate::transport::internet::kcp::DatagramCodec>>,
 }
 impl KcpInboundHandler {
-    pub fn new(inner: Arc<dyn InboundHandler>, config: crate::transport::internet::kcp::KcpConfig) -> Self { Self { inner, config } }
+    pub fn new(inner: Arc<dyn InboundHandler>, config: crate::transport::internet::kcp::KcpConfig) -> Self { Self { inner, config, codec: None } }
+    pub fn with_codec(mut self, codec: Arc<dyn crate::transport::internet::kcp::DatagramCodec>) -> Self { self.codec = Some(codec); self }
 }
 #[async_trait]
 impl InboundHandler for KcpInboundHandler {
@@ -142,7 +144,11 @@ impl InboundHandler for KcpInboundHandler {
     async fn handle_connection(&self, stream: BoxStream, remote: SocketAddr) -> Result<InboundResult> { self.inner.handle_connection(stream, remote).await }
     async fn dispatch_connection(&self, stream: BoxStream, remote: SocketAddr, dispatcher: Arc<dyn InboundDispatcher>) -> Result<()> { self.inner.dispatch_connection(stream, remote, dispatcher).await }
     async fn bind_native(&self, address: SocketAddr) -> Result<Option<Box<dyn NativeInboundListener>>> {
-        let listener = crate::transport::internet::kcp::KcpListener::bind_with_config(address, self.config.clone(), tokio_util::sync::CancellationToken::new()).await?;
+        let token = tokio_util::sync::CancellationToken::new();
+        let listener = match &self.codec {
+            Some(codec) => crate::transport::internet::kcp::KcpListener::bind_with_codec(address, self.config.clone(), token, codec.clone()).await?,
+            None => crate::transport::internet::kcp::KcpListener::bind_with_config(address, self.config.clone(), token).await?,
+        };
         Ok(Some(Box::new(KcpNativeListener { listener, handler: self.inner.clone() })))
     }
 }

@@ -80,8 +80,8 @@ impl MuxConnection {
 }
 enum Endpoint { Stream(DuplexStream), Packets(BoxDatagram, [u8; 8]) }
 struct Open { target: Destination, endpoint: Endpoint, accepted: oneshot::Sender<Result<()>> }
-struct Entry { sender: mpsc::Sender<Frame>, abort: AbortHandle }
-enum Completion { Driver(Result<()>), Session(u16, Result<()>) }
+struct Entry { sender: mpsc::Sender<Frame>, abort: AbortHandle, generation: u64 }
+enum Completion { Session(u16, u64, Result<()>) }
 type ServerContext = (SessionContext, Arc<dyn InboundDispatcher>);
 
 pub async fn serve_mux(stream: BoxStream, context: SessionContext, dispatcher: Arc<dyn InboundDispatcher>) -> Result<()> {
@@ -96,8 +96,9 @@ async fn run(stream: BoxStream, limits: MuxLimits, mut requests: Option<mpsc::Re
     let (mut reader, mut writer) = tokio::io::split(stream);
     let (frames, mut incoming) = mpsc::channel(limits.frame_queue);
     let (output, mut outgoing) = mpsc::channel::<Frame>(limits.frame_queue);
+    let mut drivers = JoinSet::new();
     let mut children = JoinSet::new();
-    children.spawn(async move {
+    drivers.spawn(async move {
         let result = async {
             loop {
                 match Frame::decode(&mut reader).await {
@@ -107,31 +108,33 @@ async fn run(stream: BoxStream, limits: MuxLimits, mut requests: Option<mpsc::Re
                 }
             }
         }.await;
-        Completion::Driver(result)
+        result
     });
-    children.spawn(async move {
+    drivers.spawn(async move {
         let result = async {
             while let Some(frame) = outgoing.recv().await { frame.encode(&mut writer).await?; }
             writer.shutdown().await?;
             Ok(())
         }.await;
-        Completion::Driver(result)
+        result
     });
     let mut sessions: HashMap<u16, Entry> = HashMap::new();
     let mut next_id = 0u16;
+    let mut generation = 0u64;
     let mut keepalive = tokio::time::interval(limits.keepalive);
     keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     keepalive.tick().await;
-    let result = async {
+    let process = async {
         loop {
             tokio::select! {
-                completed = children.join_next() => {
+                completed = children.join_next(), if !children.is_empty() => {
                     match completed {
-                        Some(Ok(Completion::Session(id, result))) => {
+                        Some(Ok(Completion::Session(id, completed_generation, result))) => {
+                            if !sessions.get(&id).is_some_and(|entry| entry.generation == completed_generation) { continue; }
                             sessions.remove(&id);
                             output.send(if result.is_err() { Frame::error(id) } else { Frame::end(id) }).await.map_err(|_| Error::Closed)?;
                         }
-                        Some(Ok(Completion::Driver(result))) => return result,
+                        Some(Err(error)) if error.is_cancelled() => {}
                         Some(Err(error)) => return Err(Error::Other(format!("mux task failed: {error}"))),
                         None => return Ok(()),
                     }
@@ -145,17 +148,19 @@ async fn run(stream: BoxStream, limits: MuxLimits, mut requests: Option<mpsc::Re
                         (!sessions.contains_key(&next_id)).then_some(next_id)
                     }).ok_or(Error::BufferOverflow)?;
                     let (sender, receiver) = mpsc::channel(limits.session_queue);
+                    generation = generation.wrapping_add(1);
+                    let task_generation = generation;
                     let output = output.clone();
                     let abort = match request.endpoint {
                         Endpoint::Stream(stream) => {
                             output.send(Frame::new_session(id, request.target, Vec::new())).await.map_err(|_| Error::Closed)?;
-                            children.spawn(async move { Completion::Session(id, bridge_stream(stream, receiver, output, id).await) })
+                            children.spawn(async move { Completion::Session(id, task_generation, bridge_stream(stream, receiver, output, id).await) })
                         }
                         Endpoint::Packets(packets, global_id) => {
-                            children.spawn(async move { Completion::Session(id, bridge_packets(packets, receiver, output, id, request.target, global_id, false, None).await) })
+                            children.spawn(async move { Completion::Session(id, task_generation, bridge_packets(packets, receiver, output, id, request.target, global_id, false, None).await) })
                         }
                     };
-                    sessions.insert(id, Entry { sender, abort });
+                    sessions.insert(id, Entry { sender, abort, generation: task_generation });
                     let _ = request.accepted.send(Ok(()));
                 }
                 frame = incoming.recv() => {
@@ -175,6 +180,8 @@ async fn run(stream: BoxStream, limits: MuxLimits, mut requests: Option<mpsc::Re
                             context.route_target = None;
                             context.outbound_tag = None;
                             let dispatcher = dispatcher.clone();
+                            generation = generation.wrapping_add(1);
+                            let task_generation = generation;
                             let (sender, receiver) = mpsc::channel(limits.session_queue);
                             sender.send(frame).await.map_err(|_| Error::Closed)?;
                             let output = output.clone();
@@ -193,9 +200,9 @@ async fn run(stream: BoxStream, limits: MuxLimits, mut requests: Option<mpsc::Re
                                     let bridge = bridge_packets(bridge, receiver, output, id, target, [0; 8], true, source);
                                     combine(dispatch, bridge).await
                                 };
-                                Completion::Session(id, result)
+                                Completion::Session(id, task_generation, result)
                             });
-                            sessions.insert(id, Entry { sender, abort });
+                            sessions.insert(id, Entry { sender, abort, generation: task_generation });
                         }
                         SessionStatus::Keep | SessionStatus::End => {
                             if let Some(entry) = sessions.get(&id) {
@@ -208,8 +215,19 @@ async fn run(stream: BoxStream, limits: MuxLimits, mut requests: Option<mpsc::Re
                 }
             }
         }
-    }.await;
+    };
+    // Supervise physical I/O even while admission or a child queue is blocked.
+    let result = tokio::select! {
+        result = process => result,
+        driver = drivers.join_next() => match driver {
+            Some(Ok(result)) => result,
+            Some(Err(error)) => Err(Error::Other(format!("mux I/O task failed: {error}"))),
+            None => Ok(()),
+        },
+    };
+    drivers.abort_all();
     children.abort_all();
+    while drivers.join_next().await.is_some() {}
     while children.join_next().await.is_some() {}
     result
 }
@@ -241,47 +259,51 @@ async fn bridge_stream(stream: DuplexStream, mut incoming: mpsc::Receiver<Frame>
             output.send(Frame::data(id, buffer[..size].to_vec())).await.map_err(|_| Error::Closed)?;
         }
     };
-    tokio::try_join!(uplink, downlink)?;
-    Ok(())
+    // Go END is full close, not a TCP half close. Either local EOF or peer END
+    // seals this child; retaining the other copy loop would leak idle sessions.
+    tokio::select! { result = uplink => result, result = downlink => result }
 }
 #[allow(clippy::too_many_arguments)]
-async fn bridge_packets(packets: BoxDatagram, mut incoming: mpsc::Receiver<Frame>, output: mpsc::Sender<Frame>, id: u16, target: Destination, global_id: [u8; 8], server: bool, mut local: Option<Destination>) -> Result<()> {
-    let mut first = !server;
-    let result = async {
-        loop {
-            tokio::select! {
-                frame = incoming.recv() => {
-                    let Some(frame) = frame else { return Ok(()); };
-                    if frame.option & OPTION_ERROR != 0 { return Err(Error::Protocol("mux peer reset packet session".into())); }
-                    if frame.option & OPTION_DATA != 0 {
-                        if frame.payload.len() > MAX_UDP_PAYLOAD { return Err(Error::BufferOverflow); }
-                        let destination = frame.target.unwrap_or_else(|| target.clone());
-                        let packet = if server {
-                            Datagram { payload: frame.payload.into(), source: local.clone(), destination }
-                        } else {
-                            Datagram { payload: frame.payload.into(), source: Some(destination), destination: local.clone().unwrap_or_else(|| target.clone()) }
-                        };
-                        packets.send(packet).await?;
-                    }
-                    if frame.status == SessionStatus::End { return Ok(()); }
-                }
-                packet = packets.recv() => {
-                    let Some(packet) = packet? else { return Ok(()); };
-                    if packet.payload.len() > MAX_UDP_PAYLOAD { return Err(Error::BufferOverflow); }
-                    if !server { local = packet.source.clone().or(local); }
-                    let destination = if server { packet.source.unwrap_or_else(|| target.clone()) } else { packet.destination };
-                    if destination.network != Network::Udp { return Err(Error::Protocol("mux packet target must be UDP".into())); }
-                    let mut frame = if first { Frame::new_session(id, destination, packet.payload.to_vec()) }
-                        else { let mut frame = Frame::data(id, packet.payload.to_vec()); frame.target = Some(destination); frame };
-                    // An empty packet is still a Data frame with a zero length.
-                    frame.option |= OPTION_DATA;
-                    frame.global_id = global_id;
-                    first = false;
-                    output.send(frame).await.map_err(|_| Error::Closed)?;
-                }
+async fn bridge_packets(packets: BoxDatagram, mut incoming: mpsc::Receiver<Frame>, output: mpsc::Sender<Frame>, id: u16, target: Destination, global_id: [u8; 8], server: bool, local: Option<Destination>) -> Result<()> {
+    let local = std::sync::RwLock::new(local);
+    let uplink = async {
+        while let Some(frame) = incoming.recv().await {
+            if frame.option & OPTION_ERROR != 0 { return Err(Error::Protocol("mux peer reset packet session".into())); }
+            if frame.option & OPTION_DATA != 0 {
+                if frame.payload.len() > MAX_UDP_PAYLOAD { return Err(Error::BufferOverflow); }
+                let destination = frame.target.unwrap_or_else(|| target.clone());
+                let local = local.read().map_err(|_| Error::Other("mux endpoint lock poisoned".into()))?.clone();
+                let packet = if server {
+                    Datagram { payload: frame.payload.into(), source: local, destination }
+                } else {
+                    Datagram { payload: frame.payload.into(), source: Some(destination), destination: local.unwrap_or_else(|| target.clone()) }
+                };
+                packets.send(packet).await?;
             }
+            if frame.status == SessionStatus::End { return Ok(()); }
         }
-    }.await;
+        Ok::<_, Error>(())
+    };
+    let downlink = async {
+        let mut first = !server;
+        while let Some(packet) = packets.recv().await? {
+            if packet.payload.len() > MAX_UDP_PAYLOAD { return Err(Error::BufferOverflow); }
+            if !server {
+                let mut local = local.write().map_err(|_| Error::Other("mux endpoint lock poisoned".into()))?;
+                *local = packet.source.clone().or_else(|| local.clone());
+            }
+            let destination = if server { packet.source.unwrap_or_else(|| target.clone()) } else { packet.destination };
+            if destination.network != Network::Udp { return Err(Error::Protocol("mux packet target must be UDP".into())); }
+            let mut frame = if first { Frame::new_session(id, destination, packet.payload.to_vec()) }
+                else { let mut frame = Frame::data(id, packet.payload.to_vec()); frame.target = Some(destination); frame };
+            frame.option |= OPTION_DATA;
+            frame.global_id = global_id;
+            first = false;
+            output.send(frame).await.map_err(|_| Error::Closed)?;
+        }
+        Ok::<_, Error>(())
+    };
+    let result = tokio::select! { result = uplink => result, result = downlink => result };
     let closed = packets.close().await;
     result.and(closed)
 }

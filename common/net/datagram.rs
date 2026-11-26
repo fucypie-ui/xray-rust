@@ -93,3 +93,35 @@ pub async fn relay_datagrams(left: BoxDatagram, right: BoxDatagram) -> Result<()
     let (a, b) = tokio::join!(left.close(), right.close());
     result.and(a).and(b)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    fn packet(value: u8) -> Datagram {
+        Datagram::new(Bytes::from(vec![value]), Destination::udp("127.0.0.1".parse().unwrap(), 53)).unwrap()
+    }
+    #[tokio::test]
+    async fn bounded_queue_applies_backpressure_and_close_wakes_blocked_sender() {
+        let (left, right) = datagram_pair(1);
+        left.send(packet(1)).await.unwrap();
+        assert!(tokio::time::timeout(Duration::from_millis(20), left.send(packet(2))).await.is_err());
+        assert_eq!(right.recv().await.unwrap().unwrap(), packet(1));
+        left.send(packet(2)).await.unwrap();
+        let sender = left.clone();
+        let blocked = tokio::spawn(async move { sender.send(packet(3)).await });
+        right.close().await.unwrap();
+        assert!(matches!(tokio::time::timeout(Duration::from_secs(2), blocked).await.unwrap().unwrap(), Err(Error::Closed)));
+        assert!(left.recv().await.unwrap().is_none());
+    }
+    #[tokio::test]
+    async fn empty_packet_is_distinct_from_eof_and_receive_cancellation_keeps_next_packet() {
+        let (left, right) = datagram_pair(1);
+        assert!(tokio::time::timeout(Duration::from_millis(10), right.recv()).await.is_err());
+        let mut empty = packet(1); empty.payload = Bytes::new();
+        left.send(empty.clone()).await.unwrap();
+        assert_eq!(right.recv().await.unwrap().unwrap(), empty);
+        left.close().await.unwrap();
+        assert!(right.recv().await.unwrap().is_none());
+    }
+}

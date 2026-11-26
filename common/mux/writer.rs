@@ -1,4 +1,4 @@
-use crate::common::errors::Result;
+use crate::common::errors::{Error, Result};
 use crate::common::mux::frame::{Frame, FrameMetadata, OPTION_DATA, SessionStatus};
 use crate::common::net::Destination;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -41,7 +41,9 @@ impl<W: AsyncWrite + Unpin> Writer<W> {
                 SessionStatus::New
             },
         );
-        meta.target = self.dest.clone();
+        if meta.session_status == SessionStatus::New || self.dest.as_ref().is_some_and(|target| target.network == crate::common::net::Network::Udp) {
+            meta.target = self.dest.clone();
+        }
         meta.global_id = self.global_id;
         meta
     }
@@ -54,6 +56,7 @@ impl<W: AsyncWrite + Unpin> Writer<W> {
         Ok(())
     }
     pub async fn write_data(&mut self, data: &[u8]) -> Result<()> {
+        if self.dest.as_ref().is_some_and(|target| target.network == crate::common::net::Network::Udp) { return self.write_packet(data, None).await; }
         for chunk in data.chunks(8192) {
             let mut meta = self.get_next_frame_meta();
             meta.option |= OPTION_DATA;
@@ -63,6 +66,22 @@ impl<W: AsyncWrite + Unpin> Writer<W> {
             buf.extend_from_slice(chunk);
             self.writer.write_all(&buf).await?;
         }
+        self.writer.flush().await?;
+        Ok(())
+    }
+    pub async fn write_packet(&mut self, data: &[u8], destination: Option<Destination>) -> Result<()> {
+        if data.len() > super::frame::MAX_UDP_PAYLOAD { return Err(Error::BufferOverflow); }
+        let mut meta = self.get_next_frame_meta();
+        if let Some(destination) = destination { meta.target = Some(destination); }
+        if !meta.target.as_ref().is_some_and(|target| target.network == crate::common::net::Network::Udp) {
+            return Err(Error::Protocol("mux packet writer requires a UDP destination".into()));
+        }
+        meta.option |= OPTION_DATA;
+        let mut buf = Vec::with_capacity(64 + data.len());
+        meta.write_to(&mut buf)?;
+        buf.extend_from_slice(&(data.len() as u16).to_be_bytes());
+        buf.extend_from_slice(data);
+        self.writer.write_all(&buf).await?;
         self.writer.flush().await?;
         Ok(())
     }

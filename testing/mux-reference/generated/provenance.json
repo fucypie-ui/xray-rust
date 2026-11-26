@@ -1,0 +1,9 @@
+{
+  "workflow_run": 45893018590,
+  "generator_commit": "1ea1cf2aab28c4a9c50e32d1d86c5dfdfb74c8d5",
+  "source_commit": "67756b3674d56b72c7a7e675e8dcd3f883e1b2f7",
+  "go_version": "go version go1.27.4 linux/amd64",
+  "fixture_sha256": "dd2496a796d24a860f55ac9f251e73664ccd8aa2de22e2cfa2614b0d670261c3",
+  "records": 12,
+  "scope": "Pinned Go VLESS multiplex FrameMetadata serialization and packet boundaries; no Rust runtime pass implied."
+}

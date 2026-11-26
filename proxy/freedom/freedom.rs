@@ -133,6 +133,9 @@ impl OutboundHandler for Handler {
 
 pub use Handler as Client;
 pub use Handler as FreedomClient;
+#[cfg(test)]
+#[path = "datagram_test.rs"]
+mod datagram_test;
 
 async fn resolve_udp(target: &Destination, strategy: DomainStrategy) -> Result<SocketAddr> {
     if target.network != Network::Udp { return Err(Error::Protocol("freedom packet destination must be UDP".into())); }
