@@ -1,10 +1,11 @@
 # Dependency upgrade audit
 
-Verified from the official crates.io API on 2026-11-26T20:05:36.798243+00:00 (UTC).
+Official crates.io API audit reconfirmed all 72 direct entries (69 unique registry packages) from 2026-11-26T20:22:13.779933+00:00 through 2026-11-26T20:22:32.780171+00:00 (UTC). Every result was non-yanked stable; no versions changed in the final recheck.
 
 Maximum semantic version with no prerelease component and yanked=false; official crates.io API; all direct, target, dev and build dependency sections in both manifests.
 
 The table records registry evidence, not a build-success claim. Linux resolver and CI results are recorded below after validation. No Rust, Cargo, rustc, or Go installation or execution is performed on Android.
+
 | Manifest / section | Dependency (registry package) | Previous requirement | Latest stable / new requirement | Published (UTC) | Source |
 | --- | --- | --- | --- | --- | --- |
 | `Cargo.toml` / `dependencies` | `tokio` (`tokio`) | `1.40` | `1.54.1` / `1.54.1` | 2026-10-21T21:05:43.950213Z | [crates.io API](https://crates.io/api/v1/crates/tokio) |
@@ -86,14 +87,39 @@ The former sha-1 package was also verified: its latest stable release is 0.10.1 
 
 Linux resolution passed for all 72 direct manifest entries (67 root including target-specific dependencies, 5 standalone desktop) in [run 45889627673](https://github.com/fucypie-ui/xray-rust/actions/runs/45889627673/job/140148780991), using commit 72d16e477faac0efe98888fa2ae5b944e88a0d13. Both lockfiles were downloaded from the latest-dependency-locks artifact without local Cargo. The compact resolver reports are committed under dependency-resolution/. The resolver verified every selected version and the full pinned rustls Git source.
 
-The standalone Dioxus desktop app passed all-target checking with RUSTFLAGS=-D warnings on Ubuntu 24.04 in [run 45889058069](https://github.com/fucypie-ui/xray-rust/actions/runs/45889058069/job/140147072420). This checks native Linux GTK/WebKit compilation, not Windows/macOS/Android packaging or graphical runtime operation.
+The standalone Dioxus desktop app passed all-target checking with RUSTFLAGS=-D warnings on Ubuntu 24.04 with the committed locks in [run 45889801380](https://github.com/fucypie-ui/xray-rust/actions/runs/45889801380/job/140149536848). This checks native Linux GTK/WebKit compilation, not Windows/macOS/Android packaging or graphical runtime operation.
 
-Pinned Go fixture regeneration and byte-for-byte comparison passed in [run 45888807788](https://github.com/fucypie-ui/xray-rust/actions/runs/45888807788/job/140146081985), retaining Go reference 67756b3674d56b72c7a7e675e8dcd3f883e1b2f7.
+Pinned Go fixture regeneration and byte-for-byte comparison passed again in [run 45890416251](https://github.com/fucypie-ui/xray-rust/actions/runs/45890416251/job/140151409287), retaining Go reference 67756b3674d56b72c7a7e675e8dcd3f883e1b2f7.
 
-Root strict check/build/tests/release are pending validation with the downloaded locks.
+Root validation passed on source commit df2dfcd213d81c231d1630e933451bc8a827f10e in [Rust CI run 45890735841](https://github.com/fucypie-ui/xray-rust/actions/runs/45890735841):
+
+- [Native job 140152579828](https://github.com/fucypie-ui/xray-rust/actions/runs/45890735841/job/140152579828): cargo check --locked --all-targets; cargo build --locked --lib --bins; cargo test --locked --all-targets --no-fail-fast -- --test-threads=1; built key-command comparison against pinned Go vectors; and cargo test --locked --doc --no-fail-fast -- --test-threads=1 all passed.
+- [Release job 140152580078](https://github.com/fucypie-ui/xray-rust/actions/runs/45890735841/job/140152580078): cargo build --locked --release --lib --bins passed with the existing release profile.
+
+These results validate this isolated dependency snapshot. The parent's newer uncommitted protocol/configuration engines require their own combined-snapshot Linux validation.
 
 ## Approved REALITY source override
 
 The root rustls dependency remains 0.23.46 with ring/std/tls12. Its source is the approved [cfal/rustls revision](https://raw.githubusercontent.com/cfal/rustls/f1a23c187330386e9e7f14a21dbae368034dc430/rustls/Cargo.toml), pinned to `f1a23c187330386e9e7f14a21dbae368034dc430`; the upstream Cargo manifest reports version 0.23.46 and license Apache-2.0 OR ISC OR MIT. The Linux resolver audit checks the Git source and full revision as well as the package version. The standalone Dioxus manifest continues to resolve registry rustls through its own graph. TLS 1.3-only REALITY configuration belongs to the separate REALITY integration lane.
 
 Cargo ignores SemVer build metadata in requirements. The TOML requirement is therefore 1.2.3 to avoid a Cargo manifest warning; the audited and locked package version remains 1.2.3+spec-1.1.0. smoltcp enables async and iface-max-addr-count-8 in addition to the requested IP/TCP/UDP/fragmentation features. quinn-proto explicitly disables default features.
+
+## API migrations
+
+- rand 0.10: use rng(), random()/random_range(), Rng for raw bytes, RngExt for extension methods, and SysRng plus TryRng for fallible OS entropy. Sampling bounds and OS-error propagation are unchanged.
+- x25519-dalek 3: pass a mutable RNG reference to random_from_rng. ML-KEM 0.3.4 retains the deterministic 64-byte seed constructor and pinned Go key/vector comparisons.
+- RustCrypto: use checked slice/array conversions instead of deprecated from_slice, KeyInit for HMAC construction, and BlockCipherEncrypt for AES blocks in both the QUIC sniffer and its wire tests. AEAD nonce bytes, counter direction, payloads, tags and AAD are unchanged.
+- rcgen 0.14.10: use CertifiedKey.signing_key in place of key_pair. Defaults remain crypto, pem and ring. KeyPair::generate_for(&PKCS_ED25519) and CertificateParams::self_signed are available with this selection.
+- tokio-tungstenite 0.30: binary/ping/pong payloads use bytes::Bytes, preserving payload contents and bridge behavior. Existing websocket tests retain their assertions.
+- socket2 0.6: socket2::Socket uses set_tcp_nodelay; Tokio and standard-library TcpStream keep set_nodelay.
+- reqwest 0.13: the standalone desktop manifest uses the renamed rustls feature in place of rustls-tls.
+
+The strict Rust lint policy and existing tests remain enabled. Cargo can report unused staged engine/configuration dependencies in this isolated dependency lane until the parent integrates the corresponding implementations; no lint suppressions were added.
+
+## Parent integration notes
+
+The complete manifests/audit/workflow handoff is available through commit 72d16e477faac0efe98888fa2ae5b944e88a0d13. Linux-generated lockfiles and compact direct-resolution reports are in 5e440d62aef7c23e435fdf85f0bfd9c951e72629. Compiler fixes follow in c6908fac50480852c31f0ae20f5e8858f396d2e2 and dff8e100a3275a138ebffeffd02327bc6458b2e4.
+
+The parent REALITY lane has replaced the older AES-GCM implementation with ring. Keep that newer implementation when integrating: do not replay this branch's baseline transport/internet/reality/reality.rs AES-array migration over it. Use the rcgen signing_key migration wherever its current tests still access key_pair.
+
+For Linux scenario validation, df2dfcd213d81c231d1630e933451bc8a827f10e cherry-picks the parent's committed e28be5b4fd5eee51c6e372e3eab649c91bc88466 test-lifetime fix. testing/scenarios/common.rs must preserve both retained Vec<Instance>/close-before-abort cleanup and rand 0.10's Rng/rng API. The parent already has the lifetime fix and should avoid applying it twice. No uncommitted files from the parent worktree were imported.
