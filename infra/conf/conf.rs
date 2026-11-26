@@ -645,20 +645,9 @@ impl Config {
                     )? {
                         handler
                     } else {
-                        let s = parse_multi_settings(out_cfg.settings, "Shadowsocks")?;
-                        if s.servers.is_empty() { return Err(Error::Config("Shadowsocks servers list is empty".into())); }
-                        let (mut hs, mut lbs) = (Vec::with_capacity(s.servers.len()), Vec::with_capacity(s.servers.len()));
-                        for (idx, srv) in s.servers.iter().enumerate() {
-                            let addr = srv.address.as_deref().unwrap_or("127.0.0.1");
-                            let port = srv.port.unwrap_or(8388);
-                            let dest = Destination::from_str(&format!("{}:{}", addr, port))?;
-                            let sub = sub_tag_for(&tag, s.servers.len(), idx);
-                            lbs.push(format!("{}:{}", addr, port));
-                            let method = srv.method.clone().unwrap_or_else(|| "aes-256-gcm".into());
-                            hs.push(Arc::new(p::shadowsocks::OutboundClient::new(
-                                &sub, dest, method, srv.password.clone().unwrap_or_default(),
-                            )) as Arc<dyn OutboundHandler>);
-                        }
+                        let (hs, lbs) = super::shadowsocks::build_classic_outbound(
+                            &tag, out_cfg.settings.as_ref(), out_cfg.stream_settings.as_ref(), out_cfg.mux.as_ref(), base_dialer,
+                        )?;
                         wrap_pingora_multi_outbound(&tag, hs, lbs)?
                     }
                 }
@@ -811,11 +800,9 @@ impl Config {
                     )? {
                         handler
                     } else {
-                        let s = parse_multi_settings(in_cfg.settings, "Shadowsocks")?;
-                        let first = s.servers.first();
-                        let pwd = first.and_then(|x| x.password.clone()).unwrap_or_default();
-                        let method = first.and_then(|x| x.method.clone()).unwrap_or_else(|| "aes-256-gcm".into());
-                        Arc::new(p::shadowsocks::InboundServer::new(&tag, method, pwd))
+                        super::shadowsocks::build_classic_inbound(
+                            &tag, in_cfg.settings.as_ref(), in_cfg.stream_settings.as_ref(),
+                        )?
                     }
                 }
                 "dokodemo-door" | "dokodemo" => {

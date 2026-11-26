@@ -12,6 +12,7 @@ pub enum CipherType {
     Aes128Gcm,
     Aes256Gcm,
     ChaCha20Poly1305,
+    XChaCha20Poly1305,
 }
 
 pub fn derive_subkey(key: &[u8], salt: &[u8], subkey: &mut [u8]) -> Result<()> {

@@ -97,3 +97,9 @@ record coverage before importing bytes. Preserve generator provenance beside
 new frozen files. Run the actual Rust assertions and nonempty live gates on
 the same integration revision before awarding their distinct evidence.
 No Rust or Go toolchain installation, compilation or tests run on Android.
+
+## Following classic AEAD and SS2022 live gates (source only)
+
+`.github/workflows/classic-shadowsocks.yml` generates four pinned-Go classic AEAD vectors on Linux, requires the ignored Rust trait test to execute, then requires production Go decoders to accept the emitted Rust TCP request/response and UDP request/native-response bytes. The helper stages `git archive` and uses read-only module resolution; the authority checkout must remain clean. Missing vectors, empty filters, ignored selected cases and failed reverse decoding are fatal. This is independent byte evidence, not a live classic Go session.
+
+The SS2022 matrix in `protocol-interop.yml` builds `testing/ss2022-reference/peer.go` against the exact pinned Go commit and requires both ignored `proxy::shadowsocks_2022::go_peer_test` cases to execute. The source specifies five configurations per direction and six pairs each: 60 UDP exchanges total. It distinguishes the full production Process path from production UDP session APIs for empty Go-client packets. Relay is outside this gate. These are pending source registrations until exact-revision Linux results are recorded.

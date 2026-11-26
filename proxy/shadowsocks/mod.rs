@@ -5,6 +5,12 @@ pub mod outbound;
 pub mod protocol;
 pub mod server;
 pub mod validator;
+mod runtime;
+mod datagram;
+mod native;
+
+#[cfg(test)]
+mod runtime_test;
 
 pub use client::Client;
 pub use config::ShadowsocksConfig;

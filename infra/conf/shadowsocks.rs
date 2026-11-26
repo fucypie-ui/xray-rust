@@ -253,6 +253,417 @@ pub(crate) fn build_2022_outbound(
     Ok(Some(Arc::new(Client::try_new(tag, Destination::tcp(address, port), config)?)))
 }
 
+#[derive(Deserialize)]
+struct ClassicSettings {
+    #[serde(flatten)]
+    endpoint: ClassicEndpoint,
+    servers: Option<Vec<ClassicEndpoint>>,
+}
+
+#[derive(Deserialize)]
+struct ClassicEndpoint {
+    method: Option<String>,
+    password: Option<String>,
+    level: Option<u8>,
+    email: Option<String>,
+    address: Option<String>,
+    port: Option<u16>,
+    network: Option<Value>,
+    uot: Option<bool>,
+    // Pinned Go uses the same typed user record for classic SS and SS2022.
+    users: Option<Vec<Shadowsocks2022UserSettings>>,
+    clients: Option<Vec<Shadowsocks2022UserSettings>>,
+}
+
+impl ClassicEndpoint {
+    fn validate_options(&self) -> Result<()> {
+        // clients overrides users even when empty. Empty account sets must not
+        // silently fall back to the top-level account either.
+        if self.clients.as_ref().or(self.users.as_ref()).is_some() {
+            return Err(Error::Unsupported("classic Shadowsocks users/clients account lists are not implemented; configure one top-level account".into()));
+        }
+        if self.uot == Some(true) {
+            return Err(Error::Unsupported("classic Shadowsocks UDP-over-TCP is not implemented".into()));
+        }
+        Ok(())
+    }
+}
+
+fn classic_settings(raw: Option<&Value>) -> Result<ClassicSettings> {
+    serde_json::from_value(raw.filter(|value| !value.is_null()).cloned().unwrap_or_else(|| serde_json::json!({})))
+        .map_err(|error| Error::Config(format!("Invalid classic Shadowsocks settings: {error}")))
+}
+
+fn classic_networks(value: Option<&Value>) -> Result<(bool, bool)> {
+    let Some(value) = value.filter(|value| !value.is_null()) else { return Ok((true, false)); };
+    let networks: Vec<&str> = match value {
+        Value::String(value) => value.split(',').collect(),
+        Value::Array(values) => values.iter().map(|value| value.as_str()
+            .ok_or_else(|| Error::Config("classic Shadowsocks network entries must be strings".into())))
+            .collect::<Result<_>>()?,
+        _ => return Err(Error::Config("classic Shadowsocks network must be a string or string array".into())),
+    };
+    let (mut tcp, mut udp) = (false, false);
+    for network in networks {
+        // Network.Build folds case only. Unknown/Unix cannot be represented by
+        // the shared Rust runtime and must not activate a supported transport.
+        match network.to_ascii_lowercase().as_str() {
+            "tcp" => tcp = true,
+            "udp" => udp = true,
+            _ => return Err(Error::Unsupported(format!("classic Shadowsocks network is not supported: {network}"))),
+        }
+    }
+    // Classic Go Server.Network defaults [] to TCP, unlike SS2022 constructors.
+    Ok((tcp || !udp, udp))
+}
+
+fn validate_classic_transport(stream: Option<&super::conf::StreamSettingsConfig>, mux: Option<&Value>) -> Result<()> {
+    if let Some(stream) = stream {
+        let network = stream.network.as_deref().unwrap_or("tcp");
+        let security = stream.security.as_deref().unwrap_or("none");
+        if !(network.eq_ignore_ascii_case("tcp") || network.eq_ignore_ascii_case("raw"))
+            || !security.eq_ignore_ascii_case("none") || stream.finalmask.is_some()
+            || stream.tls_settings.is_some() || stream.reality_settings.is_some()
+            || stream.ws_settings.is_some() || stream.httpupgrade_settings.is_some()
+            || stream.grpc_settings.is_some() || stream.xhttp_settings.is_some()
+            || stream.kcp_settings.is_some() || stream.hysteria_settings.is_some()
+        {
+            return Err(Error::Unsupported("classic Shadowsocks currently requires plain TCP/raw streamSettings without transport options".into()));
+        }
+    }
+    if let Some(mux) = mux.filter(|mux| !mux.is_null()) {
+        #[derive(Deserialize)]
+        struct Mux { enabled: Option<bool> }
+        let mux: Mux = serde_json::from_value(mux.clone())
+            .map_err(|error| Error::Config(format!("Invalid classic Shadowsocks mux settings: {error}")))?;
+        if mux.enabled == Some(true) {
+            return Err(Error::Unsupported("classic Shadowsocks multiplexing is not implemented".into()));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn build_classic_inbound(
+    tag: &str, raw: Option<&Value>, stream: Option<&super::conf::StreamSettingsConfig>,
+) -> Result<Arc<dyn InboundHandler>> {
+    validate_classic_transport(stream, None)?;
+    let settings = classic_settings(raw)?;
+    settings.endpoint.validate_options()?;
+    if settings.servers.is_some() {
+        return Err(Error::Unsupported("classic Shadowsocks inbound requires one top-level method/password account".into()));
+    }
+    let settings = settings.endpoint;
+    let (tcp, udp) = classic_networks(settings.network.as_ref())?;
+    let user = crate::common::protocol::User::with_email(
+        uuid::Uuid::nil(), settings.email.unwrap_or_default(), u32::from(settings.level.unwrap_or_default()),
+    );
+    let server = crate::proxy::shadowsocks::Server::try_new(
+        tag, settings.method.unwrap_or_default(), settings.password.unwrap_or_default(),
+    )?.with_networks(tcp, udp)?.with_user(user);
+    Ok(Arc::new(server))
+}
+
+pub(crate) fn build_classic_outbound(
+    tag: &str, raw: Option<&Value>, stream: Option<&super::conf::StreamSettingsConfig>, mux: Option<&Value>,
+    base_dialer: Option<Arc<dyn crate::transport::internet::dialer::Dialer>>,
+) -> Result<(Vec<Arc<dyn OutboundHandler>>, Vec<String>)> {
+    validate_classic_transport(stream, mux)?;
+    let settings = classic_settings(raw)?;
+    settings.endpoint.validate_options()?;
+    if settings.endpoint.network.is_some() {
+        return Err(Error::Unsupported("classic Shadowsocks outbound network filters are not implemented; the session destination selects TCP or UDP".into()));
+    }
+    // Go's flat address overrides servers. Preserve the existing Rust multiple
+    // server extension below, including its packet-aware Pingora wrapper.
+    let endpoints = if settings.endpoint.address.is_some() { vec![settings.endpoint] } else { settings.servers.unwrap_or_default() };
+    if endpoints.is_empty() { return Err(Error::Config("classic Shadowsocks servers list is empty".into())); }
+    let count = endpoints.len();
+    let (mut handlers, mut labels) = (Vec::with_capacity(count), Vec::with_capacity(count));
+    for (index, endpoint) in endpoints.into_iter().enumerate() {
+        endpoint.validate_options()?;
+        if endpoint.network.is_some() {
+            return Err(Error::Unsupported("classic Shadowsocks outbound network filters are not implemented; the session destination selects TCP or UDP".into()));
+        }
+        let address = endpoint.address.filter(|address| !address.is_empty())
+            .ok_or_else(|| Error::Config("classic Shadowsocks server address is not set".into()))?;
+        let port = endpoint.port.filter(|port| *port != 0)
+            .ok_or_else(|| Error::Config("classic Shadowsocks server port must be nonzero".into()))?;
+        let destination = Destination::tcp(address.parse::<Address>()?, port);
+        labels.push(destination.net_addr());
+        let sub_tag = if count == 1 { tag.to_string() } else { format!("{tag}#{index}") };
+        let client = crate::proxy::shadowsocks::Client::try_new(
+            sub_tag, destination, endpoint.method.unwrap_or_default(), endpoint.password.unwrap_or_default(),
+        )?;
+        let client = if let Some(dialer) = &base_dialer { client.with_dialer(dialer.clone()) } else { client };
+        handlers.push(Arc::new(client) as Arc<dyn OutboundHandler>);
+    }
+    Ok((handlers, labels))
+}
+
+#[cfg(test)]
+mod classic_tests {
+    use super::*;
+    use super::super::conf::Config;
+    use crate::common::{net::{BoxStream, datagram::{BoxDatagram, Datagram}}, protocol::SessionContext};
+    use crate::features::inbound::InboundDispatcher;
+    use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, UdpSocket}};
+
+    const PASSWORD: &str = "classic-config-password";
+    const METHODS: [&str; 4] = ["AEAD_AES_128_GCM", "aes-256-gcm", "chacha20-ietf-poly1305", "AEAD_XCHACHA20_POLY1305"];
+
+    fn account() -> Value { json!({"method": METHODS[0], "password": PASSWORD}) }
+    fn inbound(settings: Value) -> Config {
+        serde_json::from_value(json!({"inbounds": [{
+            "tag": "classic-in", "protocol": "shadowsocks", "port": 8388, "settings": settings,
+        }]})).unwrap()
+    }
+    fn outbound(settings: Value) -> Config {
+        serde_json::from_value(json!({"outbounds": [{
+            "tag": "classic-out", "protocol": "shadowsocks", "settings": settings,
+        }]})).unwrap()
+    }
+
+    struct RecordingDialer { endpoint: Destination, calls: AtomicUsize }
+    #[async_trait::async_trait]
+    impl crate::transport::internet::dialer::Dialer for RecordingDialer {
+        async fn dial(&self, destination: &Destination) -> Result<BoxStream> {
+            assert_eq!(destination, &self.endpoint);
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            crate::transport::internet::TcpDialer::dial(destination).await
+        }
+    }
+
+    #[tokio::test]
+    async fn classic_inbound_network_selection_preserves_go_defaults_through_traits() {
+        for (network, tcp, udp) in [
+            (None, true, false), (Some(Value::Null), true, false), (Some(json!([])), true, false),
+            (Some(json!("tcp")), true, false), (Some(json!(["TCP"])), true, false),
+            (Some(json!("udp")), false, true), (Some(json!(["UDP"])), false, true),
+            (Some(json!("tcp,udp")), true, true), (Some(json!("UDP,TCP")), true, true),
+            (Some(json!(["UDP", "tcp", "UDP"])), true, true),
+        ] {
+            let mut settings = account();
+            if let Some(network) = &network { settings["network"] = network.clone(); }
+            let server = inbound(settings).build().unwrap().inbounds.remove(0).1;
+            let native = server.bind_native("127.0.0.1:0".parse().unwrap()).await.unwrap();
+            assert_eq!(native.is_some(), udp, "{network:?}");
+            if let Some(native) = native {
+                let address = native.local_addr().unwrap();
+                assert!(UdpSocket::bind(address).await.is_err());
+                let tcp_probe = TcpListener::bind(address).await;
+                assert_eq!(tcp_probe.is_err(), tcp, "{network:?}");
+                drop(tcp_probe);
+                if !tcp {
+                    let (stream, _peer) = tokio::io::duplex(32);
+                    let result = tokio::time::timeout(Duration::from_secs(1), server.handle_connection(Box::pin(stream), address)).await.unwrap();
+                    assert!(matches!(result, Err(Error::Unsupported(_))));
+                }
+                drop(native);
+                drop((UdpSocket::bind(address).await.unwrap(), TcpListener::bind(address).await.unwrap()));
+            }
+            server.close().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn classic_config_authenticates_tcp_and_preserves_metadata_and_flat_precedence() {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            for method in METHODS {
+                for mode in 0..3 {
+                    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                    let address = listener.local_addr().unwrap();
+                    let endpoint = json!({"address": "127.0.0.1", "port": address.port(), "method": method, "password": PASSWORD, "uot": false});
+                    let settings = if mode == 1 { json!({"servers": [endpoint], "uot": null}) } else {
+                        let mut settings = endpoint;
+                        settings["servers"] = json!([{"address": "ignored", "port": 0, "method": "unsupported", "password": ""}]);
+                        settings
+                    };
+                    let config: Config = serde_json::from_value(json!({
+                        "inbounds": [{"tag": "classic-in", "protocol": "shadowsocks", "port": 8388,
+                            "settings": {"method": method, "password": PASSWORD, "users": null, "clients": null, "email": "classic@example", "level": 255},
+                            "streamSettings": {"network": "RAW", "security": "NONE"}}],
+                        "outbounds": [{"tag": "classic-out", "protocol": "shadowsocks", "settings": settings, "mux": {"enabled": false}}],
+                    })).unwrap();
+                    let mut built = config.build().unwrap();
+                    let server = built.inbounds.remove(0).1;
+                    assert!(server.bind_native(address).await.unwrap().is_none());
+                    let dialer = Arc::new(RecordingDialer {
+                        endpoint: Destination::tcp("127.0.0.1".parse().unwrap(), address.port()),
+                        calls: AtomicUsize::new(0),
+                    });
+                    let client = if mode == 2 {
+                        let (mut clients, labels) = build_classic_outbound(
+                            "classic-out", Some(&settings), None, None, Some(dialer.clone()),
+                        ).unwrap();
+                        assert_eq!(labels, vec![address.to_string()]);
+                        clients.remove(0)
+                    } else { built.outbounds.remove("classic-out").unwrap() };
+                    let worker = tokio::spawn(async move {
+                        let (stream, remote) = listener.accept().await.unwrap();
+                        let mut accepted = server.handle_connection(Box::pin(stream), remote).await.unwrap();
+                        assert_eq!(accepted.session.destination, Destination::from_domain_port("example.com", 443));
+                        assert_eq!(accepted.session.source, Some(remote));
+                        let user = accepted.session.user.as_ref().unwrap();
+                        assert_eq!((user.email.as_str(), user.level), ("classic@example", 255));
+                        let mut request = [0; 4];
+                        accepted.stream.read_exact(&mut request).await.unwrap();
+                        assert_eq!(&request, b"ping");
+                        accepted.stream.write_all(b"pong").await.unwrap();
+                        accepted.stream.shutdown().await.unwrap();
+                        server.close().await.unwrap();
+                    });
+                    let session = SessionContext::new("test", Destination::from_domain_port("example.com", 443));
+                    let mut stream = client.connect(&session).await.unwrap();
+                    stream.write_all(b"ping").await.unwrap();
+                    let mut response = [0; 4];
+                    stream.read_exact(&mut response).await.unwrap();
+                    assert_eq!(&response, b"pong");
+                    worker.await.unwrap();
+                    assert_eq!(dialer.calls.load(Ordering::SeqCst), usize::from(mode == 2));
+                    let udp = SessionContext::new("test", Destination::udp("example.com".parse().unwrap(), 53));
+                    let packets = client.connect_datagram(&udp).await.unwrap();
+                    assert_eq!(dialer.calls.load(Ordering::SeqCst), usize::from(mode == 2));
+                    client.close().await.unwrap();
+                    assert!(packets.recv().await.unwrap().is_none());
+                    assert!(matches!(client.connect(&session).await, Err(Error::Closed)));
+                    assert!(matches!(client.connect_datagram(&udp).await, Err(Error::Closed)));
+                }
+            }
+        }).await.unwrap();
+    }
+
+    struct PacketEcho;
+    #[async_trait::async_trait]
+    impl InboundDispatcher for PacketEcho {
+        async fn dispatch_stream(&self, _: BoxStream, _: SessionContext) -> Result<()> {
+            Err(Error::Unsupported("packet-only config test".into()))
+        }
+        async fn dispatch_datagrams(&self, packets: BoxDatagram, session: SessionContext) -> Result<()> {
+            assert_eq!(session.destination, Destination::udp("example.com".parse().unwrap(), 53));
+            let user = session.user.as_ref().unwrap();
+            assert_eq!((user.email.as_str(), user.level), ("udp@example", 7));
+            let packet = packets.recv().await?.expect("missing configured UDP packet");
+            packets.send(Datagram { payload: packet.payload, source: Some(packet.destination), destination: packet.source.unwrap() }).await
+        }
+    }
+
+    #[tokio::test]
+    async fn classic_config_native_udp_and_multi_server_wrapper_preserve_packets() {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            for method in METHODS {
+                for network in ["udp", "tcp,udp"] {
+                    for multiple in [false, true] {
+                        let settings = json!({"method": method, "password": PASSWORD, "network": network, "email": "udp@example", "level": 7});
+                        let mut servers = Vec::new();
+                        let mut endpoints = Vec::new();
+                        let mut workers = tokio::task::JoinSet::new();
+                        for _ in 0..if multiple { 2 } else { 1 } {
+                            let server = inbound(settings.clone()).build().unwrap().inbounds.remove(0).1;
+                            let mut listener = server.bind_native("127.0.0.1:0".parse().unwrap()).await.unwrap().unwrap();
+                            let address = listener.local_addr().unwrap();
+                            endpoints.push(json!({"address": "127.0.0.1", "port": address.port(), "method": method, "password": PASSWORD}));
+                            workers.spawn(async move { listener.accept(Arc::new(PacketEcho)).await.unwrap().await.unwrap(); });
+                            servers.push(server);
+                        }
+                        let settings = if multiple { json!({"servers": endpoints}) } else { endpoints.remove(0) };
+                        let client = outbound(settings).build().unwrap().outbounds.remove("classic-out").unwrap();
+                        let destination = Destination::udp("example.com".parse().unwrap(), 53);
+                        let session = SessionContext::new("test", destination.clone());
+                        assert!(matches!(client.connect(&session).await, Err(Error::Unsupported(_))));
+                        let tcp = SessionContext::new("test", Destination::from_domain_port("example.com", 443));
+                        assert!(matches!(client.connect_datagram(&tcp).await, Err(Error::Protocol(_))));
+                        let packets = client.connect_datagram(&session).await.unwrap();
+                        let source = Destination::udp("192.0.2.8".parse().unwrap(), 53000);
+                        packets.send(Datagram { payload: bytes::Bytes::from_static(b"config\0udp"), source: Some(source.clone()), destination: destination.clone() }).await.unwrap();
+                        let response = packets.recv().await.unwrap().unwrap();
+                        assert_eq!(response.payload.as_ref(), b"config\0udp");
+                        assert_eq!(response.source, Some(destination));
+                        assert_eq!(response.destination, source);
+                        packets.close().await.unwrap();
+                        client.close().await.unwrap();
+                        for server in servers { server.close().await.unwrap(); }
+                        workers.abort_all();
+                        while let Some(result) = workers.join_next().await {
+                            if let Err(error) = result { assert!(error.is_cancelled(), "{error}"); }
+                        }
+                    }
+                }
+            }
+        }).await.unwrap();
+    }
+
+    #[test]
+    fn classic_config_rejects_account_lists_uot_and_invalid_typed_settings() {
+        for extra in [
+            json!({"users": [{"method": METHODS[0], "password": PASSWORD}]}), json!({"clients": []}),
+            json!({"users": [], "clients": null}), json!({"users": [{"password": "ignored"}], "clients": []}),
+            json!({"uot": true}),
+        ] {
+            let mut settings = account();
+            settings.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            assert!(matches!(inbound(settings.clone()).build(), Err(Error::Unsupported(_))), "{settings}");
+            settings["address"] = json!("127.0.0.1"); settings["port"] = json!(8388);
+            assert!(matches!(outbound(settings.clone()).build(), Err(Error::Unsupported(_))), "{settings}");
+            assert!(matches!(outbound(json!({"servers": [settings]})).build(), Err(Error::Unsupported(_))));
+        }
+        for extra in [
+            json!({"method": false}), json!({"password": 1}), json!({"level": 256}), json!({"email": false}),
+            json!({"users": false}), json!({"clients": {}}), json!({"users": [null]}),
+            json!({"users": [{"level": 256}], "clients": []}), json!({"uot": "false"}),
+        ] {
+            let mut settings = account();
+            settings.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            assert!(matches!(inbound(settings.clone()).build(), Err(Error::Config(_))), "{settings}");
+            settings["address"] = json!("127.0.0.1"); settings["port"] = json!(8388);
+            assert!(matches!(outbound(json!({"servers": [settings]})).build(), Err(Error::Config(_))));
+        }
+        for network in [json!(""), json!("unix"), json!(" UDP "), json!("tcp, udp"), json!(["tcp", "unknown"])] {
+            let mut settings = account(); settings["network"] = network;
+            assert!(matches!(inbound(settings).build(), Err(Error::Unsupported(_))));
+        }
+        for network in [json!(false), json!(1), json!({}), json!([null])] {
+            let mut settings = account(); settings["network"] = network;
+            assert!(matches!(inbound(settings).build(), Err(Error::Config(_))));
+        }
+        for settings in [json!({}), json!({"method": METHODS[0]}), json!({"password": PASSWORD}), json!({"method": "aes-128-gcm ", "password": PASSWORD})] {
+            assert!(inbound(settings.clone()).build().is_err());
+            assert!(outbound(settings).build().is_err());
+        }
+        for extra in [json!({"address": null}), json!({"address": ""}), json!({"port": 0}), json!({"port": 65536}), json!({"port": "8388"}), json!({"password": ""})] {
+            let mut endpoint = json!({"address": "127.0.0.1", "port": 8388, "method": METHODS[0], "password": PASSWORD});
+            endpoint.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            assert!(outbound(json!({"servers": [endpoint]})).build().is_err());
+        }
+        let endpoint = json!({"address": "127.0.0.1", "port": 8388, "method": METHODS[0], "password": PASSWORD, "network": "udp"});
+        assert!(matches!(outbound(json!({"servers": [endpoint]})).build(), Err(Error::Unsupported(_))));
+    }
+
+    #[test]
+    fn classic_config_rejects_unimplemented_transport_security_and_mux() {
+        let endpoint = json!({"address": "127.0.0.1", "port": 8388, "method": METHODS[0], "password": PASSWORD});
+        for stream in [
+            json!({"network": "ws"}), json!({"network": "kcp"}), json!({"network": "udp"}),
+            json!({"network": " TCP "}), json!({"security": "tls"}), json!({"security": "reality"}), json!({"security": "unknown"}),
+            json!({"finalmask": {"tcp": []}}), json!({"wsSettings": {}}), json!({"grpcSettings": {}}),
+            json!({"xhttpSettings": {}}), json!({"httpupgradeSettings": {}}), json!({"tlsSettings": {}}),
+            json!({"kcpSettings": {}}), json!({"hysteriaSettings": {}}),
+        ] {
+            for inbound in [false, true] {
+                let entry = json!({"protocol": "shadowsocks", "port": 8388, "settings": endpoint, "streamSettings": stream});
+                let config: Config = serde_json::from_value(if inbound { json!({"inbounds": [entry]}) } else { json!({"outbounds": [entry]}) }).unwrap();
+                assert!(matches!(config.build(), Err(Error::Unsupported(_))), "{stream}");
+            }
+        }
+        for mux in [json!({"enabled": true}), json!({"enabled": "false"}), json!(true)] {
+            let config: Config = serde_json::from_value(json!({"outbounds": [{"protocol": "shadowsocks", "settings": endpoint, "mux": mux}]})).unwrap();
+            assert!(config.build().is_err(), "{mux}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod ss2022_tests {
     use super::*;
@@ -479,7 +890,7 @@ mod ss2022_tests {
         let outbound = json!({"servers": [{"address": "127.0.0.1", "port": 8388, "method": "chacha20-ietf-poly1305", "password": "legacy", "uot": true}]});
         assert!(build_2022_outbound("legacy", Some(&outbound), None, None).unwrap().is_none());
         let config: Config = serde_json::from_value(json!({"inbounds": [{"protocol": "shadowsocks", "listen": "127.0.0.1", "port": 8388, "settings": inbound}], "outbounds": [{"protocol": "shadowsocks", "settings": outbound}]})).unwrap();
-        assert!(config.build().is_ok());
+        assert!(matches!(config.build(), Err(Error::Unsupported(_))));
     }
 
     #[test]
@@ -512,7 +923,7 @@ mod ss2022_tests {
             "settings": {"method": "aes-256-gcm", "password": "legacy"},
             "streamSettings": {"network": "ws"},
         }]})).unwrap();
-        assert!(config.build().is_ok());
+        assert!(matches!(config.build(), Err(Error::Unsupported(_))));
     }
 
     #[tokio::test]

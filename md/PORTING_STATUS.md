@@ -115,3 +115,9 @@ The production engines below are integrated source, with remaining behavior and 
 - CLI: real gRPC API transport, complete config-loading/exit-code parity, uTLS fingerprints/PQ reporting, and other utilities. Certificate durations currently require positive values capped at 100 years.
 
 Passing checkpoints above describe their exact commits. Later unvalidated work must not be attributed to an earlier passing checkpoint. The remaining protocol/runtime gaps above still prevent a full 1:1 compatibility claim.
+
+## Following source changes awaiting Linux execution
+
+The next integration adds the maintained `shadowsocks` 1.25.0 classic engine: authenticated TCP and native packet-preserving UDP for the four pinned-Go AEAD methods, shared replay rejection, configured user metadata/network selection, injected stream dialers, cancellation and socket-release regressions. Thirteen ordinary runtime cases, five configuration cases and one selected independent-byte fixture case have been added; these counts describe source, not executed results. Classic multi-user accounts, UOT/mux, probing drain, nonplain configuration composition and TCP high-bit address flags remain open. The multiple-server Pingora dispatch remains an explicit Rust extension.
+
+A separate frozen SS2022 live lane now supplies production Go client/server helpers and two selected tests: five cipher/account configurations in each direction and 60 exact UDP request/reply pairs. Three single-user methods and AES128/AES256 EIH are represented. Empty Go-client packets use production UDP session APIs because the pinned full Process path drops empty buffers. Relay is excluded. The module and mandatory Linux workflow gate are wired, but neither compilation nor live success is asserted before the new revision runs.
