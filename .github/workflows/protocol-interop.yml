@@ -42,6 +42,10 @@ jobs:
             filter: transport::internet::kcp::go_peer_test
             minimum: 2
             mode: --ignored
+          - engine: ss2022
+            filter: proxy::shadowsocks_2022::go_peer_test
+            minimum: 2
+            mode: --ignored
     defaults:
       run:
         shell: bash
@@ -93,6 +97,11 @@ jobs:
               bash testing/kcp-reference/build-peer.sh "$GITHUB_WORKSPACE/go-reference" "$output_directory/kcp-go-peer"
               test -x "$output_directory/kcp-go-peer"
               printf 'XRAY_KCP_GO_PEER=%s/kcp-go-peer\n' "$output_directory" >> "$GITHUB_ENV"
+              ;;
+            ss2022)
+              bash testing/ss2022-reference/build-peer.sh "$GITHUB_WORKSPACE/go-reference" "$output_directory/ss2022-go-peer"
+              test -x "$output_directory/ss2022-go-peer"
+              printf 'XRAY_SS2022_GO_PEER=%s/ss2022-go-peer\n' "$output_directory" >> "$GITHUB_ENV"
               ;;
             *) exit 2 ;;
           esac

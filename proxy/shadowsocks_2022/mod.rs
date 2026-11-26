@@ -40,3 +40,6 @@ mod native_test;
 
 #[cfg(test)]
 mod extended_test;
+
+#[cfg(test)]
+mod go_peer_test;
