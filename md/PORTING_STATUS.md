@@ -20,7 +20,15 @@ Full 1:1 compatibility is **not established**. A matching directory layout, file
 | Protocol sniffing | Authenticate/decrypt QUIC Initial packets (draft-29/v1/v2), bounded CRYPTO reassembly, stricter TLS/SNI parsing, and production dispatcher integration. | All eight captured fixtures match adjacent Go sources byte-for-byte. Go QUIC reference tests and the combined Rust Linux run at `dc4e878` passed, including corrected SNI length tests. |
 | CLI | Shared command parser, Go-style flags, actual TLS certificate/probe operations, UUIDv5 input, and explicit errors for unimplemented API/YAML/TOML behavior. | Parser, key/certificate, TLS loopback, UUID, file, and failure-path tests passed in the combined Linux run at `dc4e878`. |
 
-## Latest executed source: 1c938da
+## Follow-up execution: ccaffb0 and Mux supervisor race
+
+Source `ccaffb033487d0075da64b6df40dc8007107f9c4` passes Rust CI 45901191650: **1,175 library / 9 binary**, no failures, 18 ordinary ignored, locked check/debug/release, 15 built-CLI comparisons, 21 argument/error checks and documentation command (zero runnable cases). Protocol 45901191660 passes strict Clippy and **17/17** live cases; classic byte workflow 45901193171 passes its required trait test and reverse Go decoding. The earlier classic scenario and concurrent Mux case both pass in the ordinary suite.
+
+Additional isolated probe 45901313190 prevents promotion: with unchanged ccaffb0 source, the strict open-peer BrokenPipe regression fails **4/10** times, while concurrent payload/metadata/close passes **40/40** and the clean-EOF regression **10/10**. Injecting the old 1c938da runtime beneath the new single-attempt EOF test produces **4/5** expected BrokenPipe failures and one pass, so this first fixture is red-capable but not deterministic. Its 60 patched-source invocations therefore give 56 passes, four failures; the probe is correctly FAILED. Baseline unmodified-source probe 45900794913 separately reproduces the original concurrent BrokenPipe **7/40** times.
+
+A follow-up source correction prioritizes the I/O driver and, on a channel-derived Ok/Closed result, awaits its authoritative completion before cleanup. This addresses channel closure becoming visible on another worker before the task result is joinable. Paired regressions now run 64 scenarios each; the open-peer test uses two workers and requires exact BrokenPipe. This follow-up is source-only pending a new exact-revision Linux run; no failure is waived. Other lane sources remain excluded. Evidence: combined-ccaffb0/ and combined-1c938da/mux-close-probe/ under the approved evidence directory.
+
+## Previous executed source: 1c938da
 
 Revision `1c938daac7a3105f64e8cc26c11e2dbe2cfcdc54` passes strict Clippy, all 17 selected live cases (including the first two SS2022 UDP groups), and bidirectional classic independent-byte validation. Ordinary CI records 1,171 library passes, two failures and 18 ignored cases; nine binary cases and locked check/debug/release pass, while CLI/docs are skipped. The two failures are Mux close `BrokenPipe` and an invalid older classic scenario inbound shape. The detailed follow-up at the end preserves run identities and scope. This is not an all-green integrated checkpoint.
 

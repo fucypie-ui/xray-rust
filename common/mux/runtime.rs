@@ -221,14 +221,26 @@ async fn run(stream: BoxStream, limits: MuxLimits, mut requests: Option<mpsc::Re
         }
     };
     // Supervise physical I/O even while admission or a child queue is blocked.
-    let result = tokio::select! {
-        result = process => result,
+    let mut result = tokio::select! {
+        biased;
         driver = drivers.join_next() => match driver {
             Some(Ok(result)) => result,
             Some(Err(error)) => Err(Error::Other(format!("mux I/O task failed: {error}"))),
             None => Ok(()),
         },
+        result = process => result,
     };
+    // Channel closure is an effect of driver termination, not its close cause.
+    // On another worker it can be visible before the task result is joinable.
+    if !drivers.is_empty() && matches!(result, Ok(()) | Err(Error::Closed))
+        && (incoming.is_closed() || output.is_closed())
+    {
+        result = match drivers.join_next().await {
+            Some(Ok(result)) => result,
+            Some(Err(error)) => Err(Error::Other(format!("mux I/O task failed: {error}"))),
+            None => result,
+        };
+    }
     drivers.abort_all();
     children.abort_all();
     while drivers.join_next().await.is_some() {}

@@ -6,7 +6,15 @@ The target is every externally exposed capability in the pinned Go default distr
 
 This audit is read-only except for this file and `md/PORTING_PLAN.md`. No local Rust/Cargo/Go installation, compilation, test execution, commit or push was performed. Existing parent/agent work, manifests, workflows and status documents were not edited. Recommendations below are planning inputs, not dependency changes.
 
-## Current scoped Linux evidence: 1c938da
+## Follow-up execution: ccaffb0 and Mux supervisor race
+
+Source `ccaffb033487d0075da64b6df40dc8007107f9c4` passes Rust CI 45901191650: **1,175 library / 9 binary**, no failures, 18 ordinary ignored, locked check/debug/release, 15 built-CLI comparisons, 21 argument/error checks and documentation command (zero runnable cases). Protocol 45901191660 passes strict Clippy and **17/17** live cases; classic byte workflow 45901193171 passes its required trait test and reverse Go decoding. The earlier classic scenario and concurrent Mux case both pass in the ordinary suite.
+
+Additional isolated probe 45901313190 prevents promotion: with unchanged ccaffb0 source, the strict open-peer BrokenPipe regression fails **4/10** times, while concurrent payload/metadata/close passes **40/40** and the clean-EOF regression **10/10**. Injecting the old 1c938da runtime beneath the new single-attempt EOF test produces **4/5** expected BrokenPipe failures and one pass, so this first fixture is red-capable but not deterministic. Its 60 patched-source invocations therefore give 56 passes, four failures; the probe is correctly FAILED. Baseline unmodified-source probe 45900794913 separately reproduces the original concurrent BrokenPipe **7/40** times.
+
+A follow-up source correction prioritizes the I/O driver and, on a channel-derived Ok/Closed result, awaits its authoritative completion before cleanup. This addresses channel closure becoming visible on another worker before the task result is joinable. Paired regressions now run 64 scenarios each; the open-peer test uses two workers and requires exact BrokenPipe. This follow-up is source-only pending a new exact-revision Linux run; no failure is waived. Other lane sources remain excluded. Evidence: combined-ccaffb0/ and combined-1c938da/mux-close-probe/ under the approved evidence directory.
+
+## Previous scoped Linux evidence: 1c938da
 
 Tested Rust source: `1c938daac7a3105f64e8cc26c11e2dbe2cfcdc54`. Full parity and a new all-green integrated checkpoint are not established: ordinary CI has two failures, while the named live and byte gates pass.
 

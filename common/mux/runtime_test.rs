@@ -205,12 +205,15 @@ async fn pending_terminal_write_result(close_peer: bool) -> Result<()> {
 
 #[tokio::test]
 async fn peer_eof_cancels_pending_terminal_write_without_carrier_error() {
-    pending_terminal_write_result(true).await.unwrap();
+    for _ in 0..64 { pending_terminal_write_result(true).await.unwrap(); }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn terminal_write_failure_with_open_peer_remains_carrier_error() {
-    assert!(matches!(pending_terminal_write_result(false).await, Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::BrokenPipe));
+    for iteration in 0..64 {
+        let result = pending_terminal_write_result(false).await;
+        assert!(matches!(&result, Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::BrokenPipe), "iteration {iteration}: {result:?}");
+    }
 }
 
 #[tokio::test]
