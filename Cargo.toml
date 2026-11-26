@@ -54,6 +54,8 @@ rand = "0.8"
 httparse = "1.9"
 socket2 = { version = "0.5", features = ["all"] }
 sha2 = "0.10"
+blake3 = "1.8"
+ml-kem = { version = "=0.3.2", features = ["zeroize"] }
 hex = "0.4"
 aes-gcm = "0.10"
 chacha20poly1305 = "0.10"
