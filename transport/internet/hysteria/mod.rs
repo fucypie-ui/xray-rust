@@ -15,3 +15,9 @@ pub use congestion::BbrSender;
 pub use conn::HysteriaConn;
 pub use dialer::HysteriaDialer;
 pub use hub::HysteriaHub;
+
+pub mod auth;
+pub mod endpoint;
+mod go_compat;
+pub(crate) mod h3_backend;
+pub mod udp;

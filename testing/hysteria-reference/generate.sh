@@ -13,16 +13,18 @@ expected_reference=67756b3674d56b72c7a7e675e8dcd3f883e1b2f7
 }
 mkdir -p -- "$2"
 output_directory=$(cd -- "$2" && pwd)
-proxy_target="$reference_root/proxy/hysteria/rust_reference_test.go"
-transport_target="$reference_root/transport/internet/hysteria/rust_reference_test.go"
+scratch=$(mktemp -d)
+cleanup() { rm -rf -- "$scratch"; }
+trap cleanup EXIT
+git -C "$reference_root" archive "$expected_reference" | tar -x -C "$scratch"
+proxy_target="$scratch/proxy/hysteria/rust_reference_test.go"
+transport_target="$scratch/transport/internet/hysteria/rust_reference_test.go"
 for target in "$proxy_target" "$transport_target"; do
     [[ ! -e $target ]] || { printf 'Refusing to overwrite %s\n' "$target" >&2; exit 1; }
 done
-cleanup() { rm -f -- "$proxy_target" "$transport_target"; }
-trap cleanup EXIT
 cp -- "$script_directory/proxy_reference_test.go" "$proxy_target"
 cp -- "$script_directory/transport_reference_test.go" "$transport_target"
-(cd -- "$reference_root" && go test ./proxy/hysteria ./transport/internet/hysteria -run '^TestRustReferenceVectors$' -count=1 -v) >"$output_directory/hysteria-reference.log" 2>&1 || {
+(cd -- "$scratch" && go test ./proxy/hysteria ./transport/internet/hysteria -run '^TestRustReferenceVectors$' -count=1 -v) >"$output_directory/hysteria-reference.log" 2>&1 || {
     cat -- "$output_directory/hysteria-reference.log" >&2
     exit 1
 }

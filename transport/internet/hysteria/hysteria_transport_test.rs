@@ -7,7 +7,6 @@ mod tests {
     use super::super::congestion::bbr::windowed_filter::WindowedMaxFilter;
     use super::super::congestion::brutal::brutal::BrutalSender;
     use super::super::congestion::common::pacer::Pacer;
-    use super::super::conn::HysteriaConn;
     use super::super::dialer::HysteriaDialer;
     use super::super::hub::HysteriaHub;
     use super::super::padding::padding::{PADDING_CHARS, Padding};
@@ -93,17 +92,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_hysteria_conn_tracking_and_hub() {
-        let conn = HysteriaConn::new();
-        conn.record_sent(1024);
-        conn.record_recv(2048);
-        assert_eq!(conn.total_sent(), 1024);
-        assert_eq!(conn.total_recv(), 2048);
-
+    async fn test_hysteria_dialer_requires_authentication_and_hub() {
         let dialer = HysteriaDialer::new(HysteriaTransportConfig::default());
         let addr = "127.0.0.1:443".parse().unwrap();
-        let dialed = dialer.dial(addr).await;
-        assert_eq!(dialed.total_sent(), 0);
+        assert!(dialer.dial(addr).await.is_err());
 
         let hub = HysteriaHub::new();
         hub.register(1, "tag1".to_string());

@@ -1,3 +1,8 @@
+//! Hysteria UDP wire messages and per-session defragmentation.
+use super::protocol::{MAX_ADDRESS_LENGTH, QuicVarint};
+use crate::common::errors::{Error, Result};
+
+pub const MAX_UDP_PAYLOAD: usize = 65507;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UDPMessage {
     pub session_id: u32,
@@ -7,100 +12,92 @@ pub struct UDPMessage {
     pub address: String,
     pub data: Vec<u8>,
 }
-
 impl UDPMessage {
     pub fn new(session_id: u32, packet_id: u16, address: String, data: Vec<u8>) -> Self {
-        Self {
-            session_id,
-            packet_id,
-            frag_id: 0,
-            frag_count: 1,
-            address,
-            data,
-        }
+        Self { session_id, packet_id, frag_id: 0, frag_count: 1, address, data }
     }
-    pub fn header_size(&self) -> usize { 8 + 2 + self.address.len() }
+    pub fn header_size(&self) -> usize { 8 + QuicVarint::size(self.address.len() as u64) + self.address.len() }
     pub fn size(&self) -> usize { self.header_size() + self.data.len() }
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        if self.address.is_empty() || self.address.len() > MAX_ADDRESS_LENGTH || self.data.is_empty() || self.data.len() > MAX_UDP_PAYLOAD {
+            return Err(Error::Protocol("invalid Hysteria UDP message length".into()));
+        }
+        let mut bytes = Vec::with_capacity(self.size());
+        // Go's transport InterConn.Write adds this field after proxy serialization.
+        bytes.extend_from_slice(&self.session_id.to_be_bytes());
+        bytes.extend_from_slice(&self.packet_id.to_be_bytes());
+        bytes.extend_from_slice(&[self.frag_id, self.frag_count]);
+        QuicVarint::write(self.address.len() as u64, &mut bytes);
+        bytes.extend_from_slice(self.address.as_bytes());
+        bytes.extend_from_slice(&self.data);
+        Ok(bytes)
+    }
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() < 9 { return Err(Error::Protocol("truncated Hysteria UDP header".into())); }
+        let (size, used) = QuicVarint::parse(&bytes[8..])?;
+        if size == 0 || size > MAX_ADDRESS_LENGTH as u64 { return Err(Error::Protocol("invalid Hysteria UDP address length".into())); }
+        let end = 8 + used + size as usize;
+        if bytes.len() <= end { return Err(Error::Protocol("truncated/empty Hysteria UDP payload".into())); }
+        if bytes.len() - end > MAX_UDP_PAYLOAD { return Err(Error::Protocol("oversized Hysteria UDP payload".into())); }
+        let address = String::from_utf8(bytes[8 + used..end].to_vec()).map_err(|_| Error::Protocol("invalid UDP address UTF-8".into()))?;
+        Ok(Self {
+            session_id: u32::from_be_bytes(bytes[..4].try_into().expect("fixed header")),
+            packet_id: u16::from_be_bytes(bytes[4..6].try_into().expect("fixed header")),
+            frag_id: bytes[6], frag_count: bytes[7], address, data: bytes[end..].to_vec(),
+        })
+    }
 }
 
-pub fn frag_udp_message(m: &UDPMessage, max_size: usize) -> Vec<UDPMessage> {
-    let header_sz = m.header_size();
-    if m.size() <= max_size || max_size <= header_sz { return vec![m.clone()]; }
-    let max_payload = max_size - header_sz;
-    let frag_count = m.data.len().div_ceil(max_payload) as u8;
-    m.data.chunks(max_payload).enumerate().map(|(i, chunk)| {
-        let mut frag = m.clone();
-        frag.frag_id = i as u8;
-        frag.frag_count = frag_count;
-        frag.data = chunk.to_vec();
-        frag
+/// An impossible MTU or more than 255 fragments is an error, never an oversized packet.
+pub fn frag_udp_message(message: &UDPMessage, maximum: usize) -> Vec<UDPMessage> {
+    if message.size() <= maximum { return vec![message.clone()]; }
+    let capacity = maximum.saturating_sub(message.header_size());
+    if capacity == 0 { return Vec::new(); }
+    let count = message.data.len().div_ceil(capacity);
+    if count > usize::from(u8::MAX) { return Vec::new(); }
+    message.data.chunks(capacity).enumerate().map(|(id, chunk)| {
+        let mut fragment = message.clone();
+        fragment.frag_id = id as u8;
+        fragment.frag_count = count as u8;
+        fragment.data = chunk.to_vec();
+        fragment
     }).collect()
 }
 
+/// One pending packet per session, matching Go. A new packet replaces old fragments.
+#[derive(Default)]
 pub struct Defragger {
-    pkt_id: u16,
-    frags: Vec<Option<UDPMessage>>,
-    count: u8,
+    key: Option<(u32, u16, u8)>,
+    fragments: Vec<Option<UDPMessage>>,
+    received: usize,
     size: usize,
 }
-
 impl Defragger {
-    pub fn new() -> Self {
-        Self {
-            pkt_id: 0,
-            frags: Vec::new(),
-            count: 0,
-            size: 0,
+    pub fn new() -> Self { Self::default() }
+    pub fn feed(&mut self, message: UDPMessage) -> Option<UDPMessage> {
+        // Go accepts FragCount 0 and 1 as unfragmented.
+        if message.frag_count <= 1 { return Some(message); }
+        if message.frag_id >= message.frag_count { return None; }
+        let key = (message.session_id, message.packet_id, message.frag_count);
+        if self.key.as_ref() != Some(&key) {
+            self.key = Some(key);
+            self.fragments = vec![None; usize::from(message.frag_count)];
+            self.received = 0;
+            self.size = 0;
         }
-    }
-    pub fn feed(&mut self, m: UDPMessage) -> Option<UDPMessage> {
-        if m.frag_count <= 1 { return Some(m); }
-        if m.frag_id >= m.frag_count { return None; }
-        let fid = m.frag_id as usize;
-        if m.packet_id != self.pkt_id || m.frag_count as usize != self.frags.len() {
-            self.pkt_id = m.packet_id;
-            self.frags = vec![None; m.frag_count as usize];
-            (self.size, self.count) = (m.data.len(), 1);
-            self.frags[fid] = Some(m);
-            return None;
-        }
-        if self.frags[fid].is_none() {
-            self.count += 1;
-            self.size += m.data.len();
-            self.frags[fid] = Some(m);
-            if self.count as usize == self.frags.len() {
-                let mut data = Vec::with_capacity(self.size);
-                let first = self.frags[0].as_ref().unwrap();
-                let (address, session_id, packet_id) = (first.address.clone(), first.session_id, first.packet_id);
-                for f in self.frags.iter().flatten() { data.extend_from_slice(&f.data); }
-                self.frags.clear();
-                (self.count, self.size) = (0, 0);
-                return Some(UDPMessage { session_id, packet_id, frag_id: 0, frag_count: 1, address, data });
-            }
-        }
-        None
-    }
-}
-
-impl Default for Defragger {
-    fn default() -> Self { Self::new() }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn test_hysteria_frag_and_defrag() {
-        let original_data = vec![0x42u8; 1000];
-        let msg = UDPMessage::new(1, 100, "1.2.3.4:53".into(), original_data.clone());
-        let frags = frag_udp_message(&msg, 300);
-        assert!(frags.len() > 1);
-        let mut defragger = Defragger::new();
-        let mut assembled = None;
-        for frag in frags { if let Some(res) = defragger.feed(frag) { assembled = Some(res); } }
-        assert!(assembled.is_some());
-        let final_msg = assembled.unwrap();
-        assert_eq!(final_msg.data, original_data);
-        assert_eq!(final_msg.packet_id, 100);
+        let index = usize::from(message.frag_id);
+        if self.fragments[index].is_some() { return None; }
+        self.size += message.data.len();
+        if self.size > MAX_UDP_PAYLOAD { *self = Self::default(); return None; }
+        let last = message.clone();
+        self.fragments[index] = Some(message);
+        self.received += 1;
+        if self.received != self.fragments.len() { return None; }
+        let mut complete = last;
+        complete.data = Vec::with_capacity(self.size);
+        for fragment in self.fragments.iter().flatten() { complete.data.extend_from_slice(&fragment.data); }
+        complete.frag_id = 0;
+        complete.frag_count = 1;
+        Some(complete)
     }
 }

@@ -9,7 +9,12 @@ pub mod server;
 pub use client::HysteriaClient;
 pub use config::HysteriaConfig;
 pub use frag::{Defragger, UDPMessage, frag_udp_message};
-pub use protocol::{QuicVarint, TcpRequest};
-pub use server::HysteriaServer;
+pub use protocol::{QuicVarint, TcpRequest, TcpResponse};
+pub use server::{HysteriaServer, HysteriaListener, HysteriaIncoming, HysteriaTcpIncoming};
 #[cfg(test)]
 mod hysteria_test;
+
+mod native;
+
+#[cfg(test)]
+mod go_peer_test;
