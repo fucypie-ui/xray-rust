@@ -5,7 +5,7 @@ pub mod outbound;
 
 use crate::app::dispatcher::DefaultDispatcher;
 use crate::common::errors::{Error, Result};
-use crate::features::inbound::InboundHandler;
+use crate::features::inbound::{InboundDispatcher, InboundHandler, NativeInboundListener};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -50,39 +50,94 @@ struct ListenerTasks {
     addresses: Vec<SocketAddr>,
 }
 
+enum BoundInbound {
+    Tcp(TcpListener, Arc<dyn InboundHandler>),
+    Native(Box<dyn NativeInboundListener>),
+}
+
 pub struct InboundManager {
     inbounds: Vec<(SocketAddr, Arc<dyn InboundHandler>)>,
     tasks: Mutex<Option<ListenerTasks>>,
     closed: std::sync::atomic::AtomicBool,
+    start_lock: tokio::sync::Mutex<()>,
 }
 
 impl InboundManager {
     pub fn new(inbounds: Vec<(SocketAddr, Arc<dyn InboundHandler>)>) -> Self {
-        Self { inbounds, tasks: Mutex::new(None), closed: std::sync::atomic::AtomicBool::new(false) }
+        Self { inbounds, tasks: Mutex::new(None), closed: std::sync::atomic::AtomicBool::new(false), start_lock: tokio::sync::Mutex::new(()) }
     }
     pub async fn start(&self, dispatcher: Arc<DefaultDispatcher>) -> Result<Vec<JoinHandle<()>>> {
-        let mut owned = self.tasks.lock().map_err(|_| Error::Other("inbound task lock".into()))?;
+        let _starting = self.start_lock.lock().await;
         if self.closed.load(std::sync::atomic::Ordering::SeqCst) { return Err(Error::Closed); }
-        if owned.is_some() { return Ok(Vec::new()); }
+        if self.tasks.lock().map_err(|_| Error::Other("inbound task lock".into()))?.is_some() { return Ok(Vec::new()); }
         // Bind the actual sockets before spawning anything: a later bind failure
         // drops all earlier listeners and propagates to Instance's startup rollback.
         // The old bridge performed a bind probe and suppressed startup errors.
         let mut listeners = Vec::new();
+        let mut addresses = Vec::new();
         for (addr, handler) in &self.inbounds {
+            if let Some(listener) = handler.bind_native(*addr).await? {
+                addresses.push(listener.local_addr()?);
+                listeners.push(BoundInbound::Native(listener));
+                continue;
+            }
             let socket = std::net::TcpListener::bind(addr).map_err(|error| {
                 Error::Io(std::io::Error::new(error.kind(), format!("inbound [{}] bind {}: {}", handler.tag(), addr, error)))
             })?;
             socket.set_nonblocking(true)?;
-            listeners.push((TcpListener::from_std(socket)?, handler.clone()));
+            let listener = TcpListener::from_std(socket)?;
+            addresses.push(listener.local_addr()?);
+            listeners.push(BoundInbound::Tcp(listener, handler.clone()));
         }
-        let addresses = listeners.iter().map(|(listener, _)| listener.local_addr()).collect::<std::io::Result<Vec<_>>>()?;
+        // No synchronous mutex is held across an asynchronous native bind.
+        // close() may have raced the bind, so recheck before spawning children.
+        let mut owned = self.tasks.lock().map_err(|_| Error::Other("inbound task lock".into()))?;
+        if self.closed.load(std::sync::atomic::Ordering::SeqCst) { return Err(Error::Closed); }
         let mut tasks = Vec::new();
-        for ((listener, handler), address) in listeners.into_iter().zip(&addresses) {
-            tracing::info!("Inbound [{}] listening on {}", handler.tag(), address);
-            tasks.push(Self::spawn_listener(listener, handler, dispatcher.clone()));
+        for (listener, address) in listeners.into_iter().zip(&addresses) {
+            tracing::info!("Inbound listening on {}", address);
+            tasks.push(match listener {
+                BoundInbound::Tcp(listener, handler) => Self::spawn_listener(listener, handler, dispatcher.clone()),
+                BoundInbound::Native(listener) => Self::spawn_native_listener(listener, dispatcher.clone()),
+            });
         }
         *owned = Some(ListenerTasks { abort: tasks.iter().map(JoinHandle::abort_handle).collect(), addresses });
         Ok(tasks)
+    }
+
+    fn spawn_native_listener(mut listener: Box<dyn NativeInboundListener>, dispatcher: Arc<dyn InboundDispatcher>) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut connections = JoinSet::new();
+            let mut backoff = ACCEPT_RETRY_MIN;
+            loop {
+                tokio::select! {
+                    completed = connections.join_next(), if !connections.is_empty() => {
+                        if let Some(Err(error)) = completed { tracing::warn!("native inbound task failed: {}", error); }
+                    }
+                    accepted = listener.accept(dispatcher.clone()) => {
+                        match accepted {
+                            Ok(task) => {
+                                backoff = ACCEPT_RETRY_MIN;
+                                connections.spawn(async move {
+                                    if let Err(error) = task.await { tracing::warn!("native inbound dispatch: {}", error); }
+                                });
+                            }
+                            Err(Error::Closed | Error::Eof) => break,
+                            Err(Error::Io(error)) => {
+                                let Some(delay) = accept_retry_delay(&error, &mut backoff) else { break; };
+                                tracing::warn!("native inbound accept: {}", error);
+                                tokio::time::sleep(delay).await;
+                            }
+                            Err(error) => {
+                                tracing::warn!("native inbound accept: {}", error);
+                                tokio::time::sleep(backoff).await;
+                                backoff = backoff.saturating_mul(2).min(ACCEPT_RETRY_MAX);
+                            }
+                        }
+                    }
+                }
+            }
+        })
     }
 
     /// Actual bound addresses, including OS-assigned ports for port-zero listeners.
@@ -121,12 +176,8 @@ impl InboundManager {
                         let _ = stream.set_nodelay(true);
                         let (handler, dispatcher) = (handler.clone(), dispatcher.clone());
                         connections.spawn(async move {
-                            match handler.handle_connection(Box::pin(stream), remote_addr).await {
-                                Ok(result) => {
-                                    if let Err(error) = dispatcher.dispatch(result.stream, result.session).await {
-                                        tracing::warn!("dispatch error: {}", error);
-                                    }
-                                }
+                            match handler.dispatch_connection(Box::pin(stream), remote_addr, dispatcher).await {
+                                Ok(()) => {}
                                 Err(Error::Closed) => {}
                                 Err(error) => tracing::warn!("[{}] handshake failed from {}: {}", handler.tag(), remote_addr, error),
                             }

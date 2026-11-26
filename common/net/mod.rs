@@ -1,5 +1,6 @@
 pub mod address;
 pub mod cnc;
+pub mod datagram;
 pub mod destination;
 pub mod find_process;
 pub mod find_process_darwin;
@@ -39,4 +40,3 @@ pub trait AsyncStream: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static {}
 impl<T> AsyncStream for T where T: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static {}
 #[cfg(test)]
 mod common_net_full_test;
-

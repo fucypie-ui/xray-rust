@@ -5,6 +5,8 @@ pub mod reader;
 pub mod server;
 pub mod session;
 pub mod writer;
+pub mod runtime;
+pub use runtime::{MuxConnection, MuxLimits, serve_mux, serve_mux_with_limits};
 
 #[cfg(test)]
 pub mod client_test;

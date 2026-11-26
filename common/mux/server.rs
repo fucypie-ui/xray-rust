@@ -10,6 +10,9 @@ pub struct MuxServer {
 
 impl MuxServer {
     pub fn new() -> Self { Self { session_manager: Arc::new(SessionManager::new()), } }
+    pub async fn serve(&self, stream: crate::common::net::BoxStream, context: crate::common::protocol::SessionContext, dispatcher: Arc<dyn crate::features::inbound::InboundDispatcher>) -> Result<()> {
+        super::runtime::serve_mux(stream, context, dispatcher).await
+    }
     pub fn session_count(&self) -> usize { self.session_manager.size() }
     pub async fn dispatch_frame(&self, frame: Frame) -> Result<Option<Session>> {
         match frame.status {

@@ -20,6 +20,45 @@ mod tests {
     use crate::common::net::BoxStream;
     use crate::features::inbound::InboundHandler;
     #[tokio::test]
+    async fn test_pingora_datagram_forwarding_preserves_packets_and_addresses() {
+        use crate::common::errors::{Error, Result};
+        use crate::common::net::{Destination, datagram::{BoxDatagram, Datagram, datagram_pair}};
+        use crate::common::protocol::SessionContext;
+        use crate::features::outbound::OutboundHandler;
+        use std::sync::Arc;
+
+        struct PacketOutbound(BoxDatagram);
+        #[async_trait::async_trait]
+        impl OutboundHandler for PacketOutbound {
+            fn tag(&self) -> &str { "packets" }
+            async fn connect(&self, _: &SessionContext) -> Result<BoxStream> {
+                Err(Error::Unsupported("stream on packet-only test outbound".into()))
+            }
+            async fn connect_datagram(&self, _: &SessionContext) -> Result<BoxDatagram> {
+                Ok(self.0.clone())
+            }
+        }
+        let (upstream, peer) = datagram_pair(4);
+        let pooled = PingoraPooledOutbound::new(
+            "pooled", vec![Arc::new(PacketOutbound(upstream))], None, 4, Duration::from_secs(30),
+        );
+        let destination = Destination::udp("127.0.0.1".parse().unwrap(), 5353);
+        let source = Destination::udp("127.0.0.1".parse().unwrap(), 34567);
+        let session = SessionContext::new("test", destination.clone());
+        let packets = pooled.connect_datagram(&session).await.unwrap();
+        for payload in [Vec::new(), vec![1], vec![2; 8193]] {
+            let mut packet = Datagram::new(payload, destination.clone()).unwrap();
+            packet.source = Some(source.clone());
+            packets.send(packet.clone()).await.unwrap();
+            assert_eq!(peer.recv().await.unwrap(), Some(packet));
+        }
+        let mut reply = Datagram::new(b"response".to_vec(), source).unwrap();
+        reply.source = Some(destination);
+        peer.send(reply.clone()).await.unwrap();
+        assert_eq!(packets.recv().await.unwrap(), Some(reply));
+        packets.close().await.unwrap();
+    }
+    #[tokio::test]
     async fn test_pingora_pool_put_and_get() {
         let pool = PingoraStreamPool::new(16, Duration::from_secs(30));
         let (a, _b) = tokio::io::duplex(4096);

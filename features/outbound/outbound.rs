@@ -1,5 +1,6 @@
 use crate::common::errors::Result;
 use crate::common::net::BoxStream;
+use crate::common::net::datagram::BoxDatagram;
 use crate::common::protocol::SessionContext;
 use crate::features::feature::TYPE_OUTBOUND_MANAGER;
 use async_trait::async_trait;
@@ -11,6 +12,9 @@ pub trait OutboundHandler: Send + Sync {
     async fn start(&self) -> Result<()> { Ok(()) }
     async fn close(&self) -> Result<()> { Ok(()) }
     async fn connect(&self, session: &SessionContext) -> Result<BoxStream>;
+    async fn connect_datagram(&self, _session: &SessionContext) -> Result<BoxDatagram> {
+        Err(crate::common::errors::Error::Unsupported(format!("outbound [{}] packet transport", self.tag())))
+    }
     fn sender_settings(&self) -> Option<Vec<u8>> { None }
     fn proxy_settings(&self) -> Option<Vec<u8>> { None }
 }

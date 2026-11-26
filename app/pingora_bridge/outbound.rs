@@ -3,6 +3,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use crate::common::errors::{Error, Result};
 use crate::common::net::BoxStream;
+use crate::common::net::datagram::BoxDatagram;
 use crate::common::protocol::SessionContext;
 use crate::features::outbound::OutboundHandler;
 use super::pool::{PingoraStreamPool, PingoraUpstreamBalancer, pool_key};
@@ -41,6 +42,21 @@ impl PingoraPooledOutbound {
 #[async_trait]
 impl OutboundHandler for PingoraPooledOutbound {
     fn tag(&self) -> &str { &self.tag }
+    async fn connect_datagram(&self, session: &SessionContext) -> Result<BoxDatagram> {
+        if self.upstreams.is_empty() {
+            return Err(Error::NotFound(format!("PingoraPooledOutbound '{}' has no upstreams", self.tag)));
+        }
+        let target_key = session.sniffed_domain.clone().unwrap_or_else(|| session.destination.address.to_string());
+        let start = self.pick_upstream_index(target_key.as_bytes());
+        let mut last_err = None;
+        for offset in 0..self.upstreams.len() {
+            match self.upstreams[(start + offset) % self.upstreams.len()].connect_datagram(session).await {
+                Ok(packets) => return Ok(packets),
+                Err(error) => last_err = Some(error),
+            }
+        }
+        Err(last_err.unwrap_or(Error::Closed))
+    }
     async fn connect(&self, session: &SessionContext) -> Result<BoxStream> {
         let key = pool_key(&format!("{}:{}", self.tag, session.destination));
         if let Some(reused) = self.pool.get(key) {

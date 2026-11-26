@@ -19,12 +19,12 @@ use crate::features::routing::{Dispatcher, DispatcherFeature, RouterFeature};
 use crate::features::stats::StatsManagerTrait;
 
 pub struct DefaultDispatcher {
-    outbounds: HashMap<String, Arc<dyn OutboundHandler>>,
-    default_outbound_tag: Option<String>,
-    outbound_manager: Option<Arc<dyn OutboundManager>>,
-    router: Option<Arc<dyn RouterFeature>>,
-    policy: Option<Arc<dyn PolicyManager>>,
-    stats: Option<Arc<dyn StatsManagerTrait>>,
+    pub(super) outbounds: HashMap<String, Arc<dyn OutboundHandler>>,
+    pub(super) default_outbound_tag: Option<String>,
+    pub(super) outbound_manager: Option<Arc<dyn OutboundManager>>,
+    pub(super) router: Option<Arc<dyn RouterFeature>>,
+    pub(super) policy: Option<Arc<dyn PolicyManager>>,
+    pub(super) stats: Option<Arc<dyn StatsManagerTrait>>,
     fakedns: Option<Arc<FakeDnsHolder>>,
     sniffer: Sniffer,
 }
