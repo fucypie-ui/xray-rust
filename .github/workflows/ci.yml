@@ -1,97 +1,73 @@
-name: Rust CI
-
+name: Mux close stress probe
 on:
-  push:
-  pull_request:
   workflow_dispatch:
-
+    inputs:
+      source_ref:
+        description: Exact Rust source revision to exercise
+        required: true
+        default: 1c938daac7a3105f64e8cc26c11e2dbe2cfcdc54
+      repetitions:
+        description: Number of nonempty selected test invocations
+        required: true
+        default: "40"
 permissions:
   contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
-env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: "0"
-  RUST_BACKTRACE: "1"
-
 jobs:
-  native:
-    name: Check, build, and test (Linux)
+  probe:
+    name: Concurrent Mux close repetitions (Linux)
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    defaults:
-      run:
-        shell: bash
+    timeout-minutes: 35
     steps:
-      - name: Check out source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Check out exact test source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
+          ref: ${{ inputs.source_ref }}
           persist-credentials: false
-
       - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
         with:
           toolchain: stable
-
       - name: Cache Cargo dependencies
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
-          # Keep compiled dependencies useful while the port still has compile errors.
           cache-on-failure: true
-
-      - name: Report toolchain
-        run: |
-          rustc --version --verbose
-          cargo --version --verbose
-
-      - name: Check all targets with locked dependencies
-        timeout-minutes: 20
-        run: cargo check --locked --all-targets
-
-      - name: Build the library and binaries
-        timeout-minutes: 20
-        run: cargo build --locked --lib --bins
-
-      # Scenario tests are modules in the library, so --all-targets includes them.
-      # Serial execution reduces interference from global state, files, and sockets.
-      - name: Run unit and scenario tests
+      - name: Repeat exact concurrent close regression
         timeout-minutes: 30
-        run: cargo test --locked --all-targets --no-fail-fast -- --test-threads=1
-
-      - name: Compare built key commands with pinned Go vectors
-        timeout-minutes: 5
-        run: python3 .github/scripts/check-key-cli-parity.py target/debug/xray testing/crypto-reference/vectors.json
-
-      # Cargo's --all-targets does not include documentation tests.
-      - name: Run documentation tests
-        timeout-minutes: 10
-        run: cargo test --locked --doc --no-fail-fast -- --test-threads=1
-
-  release:
-    name: Release build (Linux)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - name: Check out source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        env:
+          EXPECTED_SOURCE: ${{ inputs.source_ref }}
+          REPETITIONS: ${{ inputs.repetitions }}
+          CARGO_TERM_COLOR: never
+          CARGO_INCREMENTAL: "0"
+          RUST_BACKTRACE: "1"
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os,sys,subprocess,json
+          source=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          assert source==os.environ['EXPECTED_SOURCE'],source
+          count=int(os.environ['REPETITIONS']);assert 1<=count<=100
+          output=Path('mux-close-evidence');output.mkdir()
+          (output/'source.txt').write_text(source+'\n')
+          selected='common::mux::runtime_test::concurrent_tcp_and_udp_sessions_preserve_bytes_packets_and_metadata'
+          results=[]
+          for index in range(count):
+              log=output/f'iteration-{index+1:03d}.log'
+              with log.open('w') as stream:
+                  result=subprocess.run([sys.executable,'.github/scripts/run-required-rust-tests.py',selected,'1'],stdout=stream,stderr=subprocess.STDOUT)
+              text=log.read_text();passed=result.returncode==0 and f'Required gate passed: {selected} (1 executed tests)' in text
+              results.append({'iteration':index+1,'returncode':result.returncode,'passed':passed})
+              print(f'iteration {index+1}/{count}: '+('PASS' if passed else 'FAIL'),flush=True)
+              if not passed:print('\n'.join(text.splitlines()[-75:]),flush=True)
+          summary={'source':source,'filter':selected,'repetitions':count,'passed':sum(r['passed'] for r in results),'results':results}
+          (output/'result.json').write_text(json.dumps(summary,indent=2)+'\n')
+          print(json.dumps(summary),flush=True)
+          sys.exit(0 if all(r['passed'] for r in results) else 1)
+          PY
+      - name: Save each test invocation
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          persist-credentials: false
-
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
-        with:
-          toolchain: stable
-
-      - name: Cache Cargo dependencies
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-        with:
-          key: release
-          cache-on-failure: true
-
-      # Release excludes cfg(debug_assertions) modules and enables LTO in Cargo.toml.
-      - name: Build release library and binaries with locked dependencies
-        timeout-minutes: 50
-        run: cargo build --locked --release --lib --bins
+          name: mux-close-evidence
+          path: mux-close-evidence/
+          if-no-files-found: error
+          retention-days: 14
