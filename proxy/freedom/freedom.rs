@@ -9,11 +9,18 @@ pub fn generate_random_bytes(len: usize) -> Vec<u8> {
     buf
 }
 
-use crate::common::errors::Result;
+use crate::common::errors::{Error, Result};
 use crate::common::net::{Address, BoxStream, Destination};
+use crate::common::net::datagram::{BoxDatagram, Datagram, DatagramTransport, MAX_DATAGRAM_SIZE};
+use crate::common::net::Network;
 use crate::common::protocol::SessionContext;
 use crate::features::outbound::OutboundHandler;
 use crate::transport::internet::TcpDialer;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::net::UdpSocket;
+use tokio::sync::{Mutex, watch};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum DomainStrategy {
@@ -95,6 +102,20 @@ impl Handler {
 #[async_trait]
 impl OutboundHandler for Handler {
     fn tag(&self) -> &str { &self.tag }
+    async fn connect_datagram(&self, session: &SessionContext) -> Result<BoxDatagram> {
+        let target = self.config.destination_override.as_ref().unwrap_or(&session.destination);
+        let address = resolve_udp(target, self.config.domain_strategy).await?;
+        let v4 = UdpSocket::bind("0.0.0.0:0").await;
+        let v6 = UdpSocket::bind("[::]:0").await;
+        let (v4, v6) = if address.is_ipv4() { (Some(Arc::new(v4?)), v6.ok().map(Arc::new)) }
+            else { (v4.ok().map(Arc::new), Some(Arc::new(v6?))) };
+        let (closed, _) = watch::channel(false);
+        Ok(Arc::new(DirectDatagram {
+            v4, v6, closed, routes: Mutex::new(HashMap::new()),
+            strategy: self.config.domain_strategy, target_override: self.config.destination_override.clone(),
+            source: session.source.map(|source| Destination::udp(source.ip().into(), source.port())),
+        }))
+    }
     async fn connect(&self, session: &SessionContext) -> Result<BoxStream> {
         let dest = self.config.destination_override.as_ref().unwrap_or(&session.destination);
         let dial_dest = self.resolve_destination(dest).await?;
@@ -112,3 +133,68 @@ impl OutboundHandler for Handler {
 
 pub use Handler as Client;
 pub use Handler as FreedomClient;
+
+async fn resolve_udp(target: &Destination, strategy: DomainStrategy) -> Result<SocketAddr> {
+    if target.network != Network::Udp { return Err(Error::Protocol("freedom packet destination must be UDP".into())); }
+    if let Some(address) = target.to_socket_addr() { return Ok(address); }
+    let Address::Domain(domain) = &target.address else { return Err(Error::AddressParse(target.to_string())); };
+    lookup_host((domain.as_str(), target.port)).await?
+        .find(|address| match strategy { DomainStrategy::UseIPv4 => address.is_ipv4(), DomainStrategy::UseIPv6 => address.is_ipv6(), _ => true })
+        .ok_or_else(|| Error::NotFound(format!("no UDP address matching domain strategy for {target}")))
+}
+
+struct DirectDatagram {
+    v4: Option<Arc<UdpSocket>>,
+    v6: Option<Arc<UdpSocket>>,
+    routes: Mutex<HashMap<SocketAddr, Destination>>,
+    closed: watch::Sender<bool>,
+    strategy: DomainStrategy,
+    target_override: Option<Destination>,
+    source: Option<Destination>,
+}
+async fn receive_udp(socket: &Option<Arc<UdpSocket>>, buffer: &mut [u8]) -> std::io::Result<(usize, SocketAddr)> {
+    match socket { Some(socket) => socket.recv_from(buffer).await, None => std::future::pending().await }
+}
+#[async_trait]
+impl DatagramTransport for DirectDatagram {
+    async fn recv(&self) -> Result<Option<Datagram>> {
+        let mut closed = self.closed.subscribe();
+        if *closed.borrow() { return Ok(None); }
+        let mut v4 = vec![0; MAX_DATAGRAM_SIZE + 1];
+        let mut v6 = vec![0; MAX_DATAGRAM_SIZE + 1];
+        loop {
+            let (size, remote, buffer) = tokio::select! {
+                _ = closed.changed() => return Ok(None),
+                packet = receive_udp(&self.v4, &mut v4) => { let (size, remote) = packet?; (size, remote, &v4) }
+                packet = receive_udp(&self.v6, &mut v6) => { let (size, remote) = packet?; (size, remote, &v6) }
+            };
+            if size > MAX_DATAGRAM_SIZE { return Err(Error::BufferOverflow); }
+            let local = self.routes.lock().await.get(&remote).cloned();
+            // Ignore unsolicited datagrams on the association's ephemeral socket.
+            if let Some(destination) = local {
+                return Ok(Some(Datagram { payload: buffer[..size].to_vec().into(), source: Some(Destination::udp(remote.ip().into(), remote.port())), destination }));
+            }
+        }
+    }
+    async fn send(&self, packet: Datagram) -> Result<()> {
+        if packet.payload.len() > MAX_DATAGRAM_SIZE { return Err(Error::BufferOverflow); }
+        let mut closed = self.closed.subscribe();
+        if *closed.borrow() { return Err(Error::Closed); }
+        let operation = async {
+            let target = self.target_override.as_ref().unwrap_or(&packet.destination);
+            let address = resolve_udp(target, self.strategy).await?;
+            let socket = if address.is_ipv4() { self.v4.as_ref() } else { self.v6.as_ref() }
+                .ok_or_else(|| Error::Unsupported("UDP address family is unavailable on this host".into()))?;
+            {
+                let mut routes = self.routes.lock().await;
+                if !routes.contains_key(&address) && routes.len() >= 64 { return Err(Error::BufferOverflow); }
+                routes.insert(address, packet.source.or_else(|| self.source.clone()).unwrap_or_else(|| packet.destination.clone()));
+            }
+            let size = socket.send_to(&packet.payload, address).await?;
+            if size != packet.payload.len() { return Err(Error::Io(std::io::Error::new(std::io::ErrorKind::WriteZero, "partial UDP send"))); }
+            Ok(())
+        };
+        tokio::select! { _ = closed.changed() => Err(Error::Closed), result = operation => result }
+    }
+    async fn close(&self) -> Result<()> { self.closed.send_replace(true); Ok(()) }
+}
