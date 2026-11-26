@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/xtls/xray-core/common/buf"
+	"github.com/xtls/xray-core/common/log"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/transport/internet"
 	"github.com/xtls/xray-core/transport/internet/kcp"
@@ -23,6 +24,8 @@ const reference = "67756b3674d56b72c7a7e675e8dcd3f883e1b2f7"
 const requestSize, responseSize = 65539, 49159
 
 func main() {
+	// common/log defaults to stdout; reserve that channel for strict JSON events.
+	log.RegisterHandler(log.NewLogger(log.CreateStderrLogWriter()))
 	mode := flag.String("mode", "server", "server or client")
 	address := flag.String("address", "127.0.0.1:0", "UDP listen or remote address")
 	mtu := flag.Uint("mtu", 1350, "raw mKCP MTU (200 or 1350)")
