@@ -75,7 +75,9 @@ impl DatagramTransport for VmessDatagram {
         if self.enforce_destination && packet.destination != self.destination {
             return Err(Error::Protocol("VMess UDP command cannot change its fixed destination".into()));
         }
-        if packet.payload.is_empty() { return Ok(()); }
+        if packet.payload.is_empty() {
+            return Err(Error::Unsupported("VMess UDP cannot encode an empty datagram: an empty body frame signals EOF".into()));
+        }
         tokio::select! {
             biased;
             _ = closed.changed() => Err(Error::Closed),

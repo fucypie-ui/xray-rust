@@ -64,7 +64,7 @@ async fn native_udp_dispatch_and_outbound_preserve_packets_and_addresses() {
             let packets = client.connect_datagram(&session).await.unwrap();
             let wrong = Destination::udp(Address::Domain("wrong.example.org".into()), 53);
             assert!(packets.send(Datagram { payload: Bytes::from_static(b"wrong"), source: Some(local.clone()), destination: wrong }).await.is_err());
-            packets.send(Datagram { payload: Bytes::new(), source: Some(local.clone()), destination: target.clone() }).await.unwrap();
+            assert!(matches!(packets.send(Datagram { payload: Bytes::new(), source: Some(local.clone()), destination: target.clone() }).await, Err(Error::Unsupported(_))));
             for length in lengths {
                 let payload = Bytes::from((0..length).map(|index| (index % 251) as u8).collect::<Vec<_>>());
                 packets.send(Datagram { payload: payload.clone(), source: Some(local.clone()), destination: target.clone() }).await.unwrap();
@@ -78,6 +78,47 @@ async fn native_udp_dispatch_and_outbound_preserve_packets_and_addresses() {
             server.await.unwrap();
         }
     }).await.expect("native VMess packet dispatch deadlock");
+}
+
+#[tokio::test]
+async fn empty_udp_packets_are_unsupported_without_closing_the_session() {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let target = Destination::udp(Address::Domain("example.org".into()), 53);
+        let source = Destination::udp(Address::Ipv4(Ipv4Addr::LOCALHOST), 12345);
+        for security in [BodySecurity::Aes128Gcm, BodySecurity::ChaCha20Poly1305] {
+            let mut request = RequestHeader::new(Uuid::nil(), RequestCommand::Udp, target.clone());
+            request.security = security;
+            let (left, right) = tokio::io::duplex(16384);
+            let mut client = VmessStream::client(Box::pin(left), request.clone()).unwrap();
+            let mut server = VmessStream::server(Box::pin(right), request).unwrap();
+            assert!(matches!(client.send_packet(&[]).await, Err(Error::Unsupported(_))));
+            assert!(matches!(server.send_packet(&[]).await, Err(Error::Unsupported(_))));
+            let client = VmessDatagram::outbound(client, target.clone()).unwrap();
+            let server = VmessDatagram::inbound(server, target.clone(), Some(source.clone())).unwrap();
+            let empty = Datagram { payload: Bytes::new(), source: Some(source.clone()), destination: target.clone() };
+            assert!(matches!(client.send(empty.clone()).await, Err(Error::Unsupported(_))));
+            assert!(matches!(server.send(empty).await, Err(Error::Unsupported(_))));
+            // A rejected empty packet must neither emit EOF nor advance either
+            // body codec. The next ordinary packet must work in both directions.
+            let payload = Bytes::from_static(b"packet after rejected empty datagram");
+            let packet = Datagram { payload: payload.clone(), source: Some(source.clone()), destination: target.clone() };
+            let (sent, received) = tokio::join!(client.send(packet), server.recv());
+            sent.unwrap();
+            let received = received.unwrap().expect("empty send closed the VMess request direction");
+            assert_eq!(received.payload, payload);
+            assert_eq!(received.source, Some(source.clone()));
+            assert_eq!(received.destination, target);
+            let reply = Datagram { payload: payload.clone(), source: Some(target.clone()), destination: source.clone() };
+            let (sent, received) = tokio::join!(server.send(reply), client.recv());
+            sent.unwrap();
+            let received = received.unwrap().expect("empty send closed the VMess response direction");
+            assert_eq!(received.payload, payload);
+            assert_eq!(received.source, Some(target.clone()));
+            assert_eq!(received.destination, source);
+            let (left, right) = tokio::join!(client.close(), server.close());
+            left.unwrap(); right.unwrap();
+        }
+    }).await.expect("empty VMess packet rejection corrupted the session");
 }
 
 #[tokio::test]

@@ -57,8 +57,12 @@ and session methods within a disposable package-local test.
 * UDP command framing: each AsyncWrite is one packet and each AsyncRead returns
   at most one frame (small read buffers retain the remainder). The typed
   VmessStream::send_packet/recv_packet methods preserve full packet boundaries;
-  BoxStream itself has no packet metadata or datagram interface. Empty packets
-  are dropped, as in Go. The pinned Go buffer size is 8192 bytes; stream payload
+  BoxStream itself has no packet metadata or datagram interface. Both
+  DatagramTransport::send and VmessStream::send_packet explicitly reject empty
+  UDP packets with Unsupported: an empty VMess body frame signals EOF. Go's
+  packet writer silently drops empty packets; this API reports that limitation.
+  Mux payloads use the shared multiplex codec, which preserves empty UDP Data
+  frames. The pinned Go buffer size is 8192 bytes; stream payload
   limits reserve the length field, authentication tag, and maximum padding.
   Oversized UDP writes return errors rather than being split into packets. This
   is an explicit API difference: Go's packet writer silently drops packets that

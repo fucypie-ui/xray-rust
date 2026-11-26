@@ -49,7 +49,9 @@ impl VmessStream {
     pub fn is_packet(&self) -> bool {self.writer.is_packet()}
     pub async fn send_packet(&mut self, packet: &[u8]) -> Result<()> {
         if !self.writer.is_packet() {return Err(Error::Protocol("VMess session is not UDP".into()));}
-        if packet.is_empty() {return Ok(());} // Go drops empty UDP buffers.
+        if packet.is_empty() {
+            return Err(Error::Unsupported("VMess UDP cannot encode an empty datagram: an empty body frame signals EOF".into()));
+        }
         self.write_all(packet).await?;self.flush().await?;Ok(())
     }
     pub async fn recv_packet(&mut self) -> Result<Option<Vec<u8>>> {
