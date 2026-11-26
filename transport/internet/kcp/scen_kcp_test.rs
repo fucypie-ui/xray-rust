@@ -48,10 +48,10 @@ mod tests {
         conn1.send_data(payload).await.unwrap();
 
         let mut buf = [0u8; 1024];
-        let (n, _) = s2.recv_from(&mut buf).await.unwrap();
-        conn2.handle_incoming_segment(&buf[..n]).await.unwrap();
-
-        let (ack_n, _) = s1.recv_from(&mut buf).await.unwrap();
-        conn1.handle_incoming_segment(&buf[..ack_n]).await.unwrap();
+        let count = tokio::time::timeout(std::time::Duration::from_secs(2), conn2.recv(&mut buf)).await.unwrap().unwrap();
+        assert_eq!(&buf[..count], payload);
+        tokio::time::timeout(std::time::Duration::from_secs(2), conn1.flush()).await.unwrap().unwrap();
+        conn1.cancel().await;
+        conn2.cancel().await;
     }
 }

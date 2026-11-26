@@ -1,26 +1,29 @@
-use super::receiving::{AckList, ReceivingWindow};
-use super::segment::{COMMAND_TERMINATE, CmdOnlySegment, DataSegment, Segment, read_segment};
-use super::sending::SendingWindow;
-use crate::common::errors::{Error, Result};
+use std::future::poll_fn;
 use std::net::SocketAddr;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::net::UdpSocket;
-use tokio::sync::Mutex;
+use std::sync::{Arc, OnceLock, Weak};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum State {
-    Active = 0,
-    ReadyToClose = 1,
-    PeerClosed = 2,
-    Terminating = 3,
-    PeerTerminating = 4,
-    Terminated = 5,
+use tokio::net::UdpSocket;
+use tokio::sync::mpsc;
+use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
+
+use super::config::KcpConfig;
+use super::runtime::{self, ConnectionStats, DatagramCodec, Incoming, KcpStream, Lease, Shared};
+use super::wire::read_segments;
+use crate::common::errors::{Error, Result};
+use crate::common::net::BoxStream;
+
+pub use super::engine::State;
+
+/// Monotonic time for callers using the public low-level window helpers.
+/// Session wire timestamps use milliseconds since that session was created.
+pub fn now_millis() -> u32 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u32
 }
 
-pub fn now_millis() -> u32 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u32 }
-
+/// Public diagnostic RTT helper retained for existing low-level callers.
+/// Arithmetic is the same as Go RoundTripInfo, including peer-RTO aging.
 pub struct RoundTripInfo {
     pub variation: u32,
     pub srtt: u32,
@@ -28,162 +31,143 @@ pub struct RoundTripInfo {
     pub min_rtt: u32,
     pub updated_timestamp: u32,
 }
-
 impl RoundTripInfo {
     pub fn new() -> Self {
-        Self {
-            variation: 0,
-            srtt: 0,
-            rto: 200,
-            min_rtt: 20,
-            updated_timestamp: 0,
-        }
+        Self { variation: 0, srtt: 0, rto: 100, min_rtt: 50, updated_timestamp: 0 }
+    }
+    pub fn update_peer_rto(&mut self, rto: u32, current: u32) {
+        if current.wrapping_sub(self.updated_timestamp) < 3000 { return; }
+        self.updated_timestamp = current;
+        self.rto = rto;
     }
     pub fn update(&mut self, rtt: u32, current: u32) {
-        if rtt > 0x7FFFFFFF { return; }
+        if rtt > 0x7fff_ffff { return; }
         if self.srtt == 0 {
             self.srtt = rtt;
             self.variation = rtt / 2;
         } else {
-            self.variation = (3 * self.variation + rtt.abs_diff(self.srtt)) / 4;
-            self.srtt = ((7 * self.srtt + rtt) / 8).max(self.min_rtt);
+            self.variation = self.variation.wrapping_mul(3).wrapping_add(rtt.abs_diff(self.srtt)) / 4;
+            self.srtt = (self.srtt.wrapping_mul(7).wrapping_add(rtt) / 8).max(self.min_rtt);
         }
-        let rto = (self.srtt + if self.min_rtt < 4 * self.variation { 4 * self.variation } else { self.variation }).min(10000);
-        self.rto = (rto * 5 / 4).max(self.min_rtt);
+        let four = self.variation.wrapping_mul(4);
+        let variation = if self.min_rtt < four { four } else { self.variation };
+        self.rto = self.srtt.wrapping_add(variation).min(10_000) * 5 / 4;
         self.updated_timestamp = current;
     }
 }
+impl Default for RoundTripInfo { fn default() -> Self { Self::new() } }
 
-impl Default for RoundTripInfo {
-    fn default() -> Self { Self::new() }
-}
-
+/// A live session. Every constructor starts packet input and timed output;
+/// applications never need to call input_packet or flush to run the ARQ.
 #[derive(Clone)]
 pub struct KcpConnection {
     pub conv: u16,
-    pub socket: Arc<UdpSocket>,
     pub remote_addr: Option<SocketAddr>,
-    pub state: Arc<Mutex<State>>,
-    pub rtt_info: Arc<Mutex<RoundTripInfo>>,
-    pub send_window: Arc<Mutex<SendingWindow>>,
-    pub recv_window: Arc<Mutex<ReceivingWindow>>,
-    pub ack_list: Arc<Mutex<AckList>>,
-    pub next_send_num: Arc<AtomicU32>,
-    pub received_stream_buf: Arc<Mutex<Vec<u8>>>,
     pub mss: usize,
+    local_addr: SocketAddr,
+    lease: Arc<Lease>,
 }
-
 impl KcpConnection {
     pub fn new(conv: u16, socket: Arc<UdpSocket>) -> Self {
-        let remote_addr = socket.peer_addr().ok();
-        Self::with_remote_addr(conv, socket, remote_addr)
+        let remote = socket.peer_addr().expect("KcpConnection::new requires a connected UDP socket");
+        Self::with_remote_addr(conv, socket, Some(remote))
     }
     pub fn with_remote_addr(conv: u16, socket: Arc<UdpSocket>, remote_addr: Option<SocketAddr>) -> Self {
-        Self {
-            conv, socket, remote_addr, mss: 1400,
-            state: Arc::new(Mutex::new(State::Active)),
-            rtt_info: Arc::new(Mutex::new(RoundTripInfo::new())),
-            send_window: Arc::new(Mutex::new(SendingWindow::new())),
-            recv_window: Arc::new(Mutex::new(ReceivingWindow::new())),
-            ack_list: Arc::new(Mutex::new(AckList::new())),
-            next_send_num: Arc::new(AtomicU32::new(0)),
-            received_stream_buf: Arc::new(Mutex::new(Vec::with_capacity(65535))),
-        }
+        let remote = remote_addr.or_else(|| socket.peer_addr().ok())
+            .expect("mKCP requires a remote socket address");
+        Self::from_socket_with_config(conv, socket, remote, KcpConfig::default(), CancellationToken::new())
+            .expect("default mKCP configuration requires a running Tokio runtime")
+    }
+    pub fn from_socket_with_config(
+        conv: u16, socket: Arc<UdpSocket>, remote: SocketAddr,
+        config: KcpConfig, cancellation: CancellationToken,
+    ) -> Result<Self> {
+        let codec = runtime::config_codec(&config);
+        Self::from_socket_with_codec(conv, socket, remote, config, cancellation, codec)
+    }
+    pub fn from_socket_with_codec(
+        conv: u16, socket: Arc<UdpSocket>, remote: SocketAddr,
+        config: KcpConfig, cancellation: CancellationToken, codec: Arc<dyn DatagramCodec>,
+    ) -> Result<Self> {
+        Self::start(conv, socket, remote, config, cancellation, codec, Incoming::Socket)
+    }
+    pub(super) fn accepted(
+        conv: u16, socket: Arc<UdpSocket>, remote: SocketAddr,
+        config: KcpConfig, cancellation: CancellationToken, codec: Arc<dyn DatagramCodec>,
+        incoming: mpsc::Receiver<Vec<u8>>,
+    ) -> Result<Self> {
+        Self::start(conv, socket, remote, config, cancellation, codec, Incoming::Demux(incoming))
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn start(
+        conv: u16, socket: Arc<UdpSocket>, remote: SocketAddr,
+        config: KcpConfig, cancellation: CancellationToken, codec: Arc<dyn DatagramCodec>,
+        incoming: Incoming,
+    ) -> Result<Self> {
+        let local_addr = socket.local_addr()?;
+        let lease = runtime::start(conv, socket, remote, &config, cancellation, codec, incoming)?;
+        Ok(Self { conv, local_addr, remote_addr: Some(remote), mss: (config.mtu - 18) as usize, lease })
+    }
+    pub(super) fn shared(&self) -> &Arc<Shared> { &self.lease.0 }
+    pub(super) fn weak_lease(&self) -> Weak<Lease> { Arc::downgrade(&self.lease) }
+    pub(super) fn from_lease(lease: Arc<Lease>, conv: u16, local_addr: SocketAddr, peer: SocketAddr, mss: usize) -> Self {
+        Self { conv, local_addr, remote_addr: Some(peer), mss, lease }
     }
     pub fn conv(&self) -> u16 { self.conv }
-    async fn send_packet(&self, buf: &[u8]) -> Result<usize> {
-        if self.socket.peer_addr().is_ok() {
-            Ok(self.socket.send(buf).await?)
-        } else if let Some(addr) = self.remote_addr {
-            Ok(self.socket.send_to(buf, addr).await?)
-        } else {
-            Err(Error::Protocol("missing destination address for kcp packet".into()))
-        }
-    }
+    pub fn local_addr(&self) -> Result<SocketAddr> { Ok(self.local_addr) }
+    pub fn peer_addr(&self) -> Result<SocketAddr> { self.remote_addr.ok_or(Error::Closed) }
+    pub fn stats(&self) -> ConnectionStats { self.shared().lock().engine.statistics() }
     pub async fn is_closed(&self) -> bool {
-        let state = self.state.lock().await;
-        *state == State::Terminated || *state == State::Terminating
+        matches!(self.stats().state, State::Terminating | State::Terminated)
     }
-    pub async fn handle_incoming_segment(&self, raw: &[u8]) -> Result<()> { self.input_packet(raw).await }
-    pub async fn input_packet(&self, mut raw: &[u8]) -> Result<()> {
-        let current = now_millis();
-        while let Some((seg, remaining)) = read_segment(raw) {
-            raw = remaining;
-            if seg.conversation() != self.conv { continue; }
-            match seg {
-                Segment::Data(data_seg) => {
-                    let number = data_seg.number;
-                    let mut r_wnd = self.recv_window.lock().await;
-                    self.ack_list.lock().await.add(number, data_seg.timestamp);
-                    r_wnd.set(data_seg);
-                    r_wnd.drain_in_order(&mut *self.received_stream_buf.lock().await);
-                    self.send_window.lock().await.handle_fast_ack(number, 200);
-                }
-                Segment::Ack(ack_seg) => {
-                    let mut s_wnd = self.send_window.lock().await;
-                    s_wnd.clear(ack_seg.receiving_next);
-                    let mut rtt = self.rtt_info.lock().await;
-                    for &num in &ack_seg.number_list {
-                        if let Some(measured) = s_wnd.acknowledge(num, current) { rtt.update(measured, current); }
-                    }
-                }
-                Segment::CmdOnly(cmd_seg) if cmd_seg.cmd == COMMAND_TERMINATE => {
-                    *self.state.lock().await = State::PeerClosed;
-                }
-                Segment::CmdOnly(_) => {}
-            }
+    pub fn is_terminated(&self) -> bool { self.stats().state == State::Terminated }
+    pub async fn handle_incoming_segment(&self, packet: &[u8]) -> Result<()> { self.input_packet(packet).await }
+    /// Optional injection hook for an already-unwrapped Go mKCP datagram.
+    pub async fn input_packet(&self, packet: &[u8]) -> Result<()> {
+        let segments = read_segments(packet);
+        if segments.first().is_none_or(|segment| segment.conv() != self.conv) {
+            return Err(Error::Protocol("invalid or foreign mKCP packet".into()));
         }
-        self.flush_acks().await
+        let mut core = self.shared().lock();
+        core.engine.input(segments, self.shared().elapsed());
+        drop(core);
+        self.shared().notify.notify_one();
+        Ok(())
     }
-    pub async fn send_data(&self, payload: &[u8]) -> Result<()> {
-        if self.is_closed().await { return Err(Error::Closed); }
-        {
-            let mut s_wnd = self.send_window.lock().await;
-            for chunk in payload.chunks(self.mss) {
-                let mut seg = DataSegment::new(self.conv, self.next_send_num.fetch_add(1, Ordering::SeqCst), chunk.to_vec());
-                seg.timestamp = now_millis();
-                s_wnd.push(seg);
-            }
+    pub async fn send_data(&self, mut data: &[u8]) -> Result<()> {
+        while !data.is_empty() {
+            let count = poll_fn(|cx| self.shared().poll_write(cx, data)).await?;
+            data = &data[count..];
         }
-        self.flush().await
+        Ok(())
+    }
+    /// Waits until queued data has been acknowledged. Background timers
+    /// continue retransmissions even when this method is never called.
+    pub async fn flush(&self) -> Result<()> {
+        poll_fn(|cx| self.shared().poll_flush(cx)).await?;
+        Ok(())
     }
     pub async fn flush_acks(&self) -> Result<()> {
-        let current = now_millis();
-        let mut acks = self.ack_list.lock().await;
-        let r_wnd = self.recv_window.lock().await;
-        if let Some(ack_seg) = acks.flush(self.conv, 256, r_wnd.next_number, current) {
-            let mut buf = vec![0u8; ack_seg.byte_size()];
-            let len = ack_seg.serialize(&mut buf)?;
-            self.send_packet(&buf[..len]).await?;
-        }
+        self.shared().notify.notify_one();
         Ok(())
     }
-    pub async fn flush(&self) -> Result<()> {
-        let (current, rto, mut to_send) = (now_millis(), self.rtt_info.lock().await.rto, Vec::new());
-        self.send_window.lock().await.flush(current, rto, 128 * 1024, &mut to_send);
-        for seg in to_send {
-            let mut buf = vec![0u8; seg.byte_size()];
-            let len = seg.serialize(&mut buf)?;
-            self.send_packet(&buf[..len]).await?;
-        }
-        self.flush_acks().await
-    }
+    /// Waits for ordered bytes, a peer close, or cancellation. Zero is EOF.
     pub async fn recv(&self, buf: &mut [u8]) -> Result<usize> {
-        let mut stream = self.received_stream_buf.lock().await;
-        if stream.is_empty() { return Ok(0); }
-        let n = buf.len().min(stream.len());
-        buf[..n].copy_from_slice(&stream[..n]);
-        stream.drain(..n);
-        Ok(n)
+        Ok(poll_fn(|cx| self.shared().poll_read(cx, buf)).await?)
     }
     pub async fn close(&self) -> Result<()> {
-        let mut state = self.state.lock().await;
-        *state = State::Terminating;
-        let cmd = CmdOnlySegment::new(self.conv, COMMAND_TERMINATE);
-        let mut buf = vec![0u8; cmd.byte_size()];
-        let len = cmd.serialize(&mut buf)?;
-        let _ = self.send_packet(&buf[..len]).await;
-        *state = State::Terminated;
+        self.shared().request_close();
         Ok(())
     }
+    /// Immediate local cancellation wakes blocked I/O and joins the driver.
+    pub async fn cancel(&self) {
+        self.shared().cancellation.cancel();
+        self.shared().join().await;
+    }
+    pub async fn wait_closed(&self) {
+        poll_fn(|cx| self.shared().poll_closed(cx)).await;
+        self.shared().join().await;
+    }
+    pub fn into_stream(self) -> KcpStream { KcpStream::new(self) }
+    pub fn into_box_stream(self) -> BoxStream { self.into_stream().into_boxed() }
 }

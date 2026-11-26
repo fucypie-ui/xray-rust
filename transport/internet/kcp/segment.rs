@@ -67,7 +67,7 @@ impl DataSegment {
             option: 0,
             timestamp: 0,
             number,
-            sending_next: number + 1,
+            sending_next: number.wrapping_add(1),
             payload,
             timeout: 0,
             transmit: 0,
@@ -76,7 +76,7 @@ impl DataSegment {
     pub fn byte_size(&self) -> usize { DATA_SEGMENT_OVERHEAD + self.payload.len() }
     pub fn serialize(&self, buf: &mut [u8]) -> Result<usize> {
         let total = self.byte_size();
-        if buf.len() < total { return Err(Error::BufferOverflow); }
+        if self.payload.len() > u16::MAX as usize || buf.len() < total { return Err(Error::BufferOverflow); }
         buf[0..2].copy_from_slice(&self.conv.to_be_bytes());
         buf[2] = COMMAND_DATA;
         buf[3] = self.option;
@@ -95,7 +95,9 @@ impl DataSegment {
         }
     }
     pub fn parse(conv: u16, option: u8, buf: &[u8]) -> Option<(Self, &[u8])> {
-        if buf.len() < 14 { return None; }
+        // Go requires a byte past the 14-byte data header. An empty data
+        // segment at the end of a datagram is therefore not accepted.
+        if buf.len() < 15 { return None; }
         let data_len = u16::from_be_bytes([buf[12], buf[13]]) as usize;
         let rest = buf.get(14..)?;
         if rest.len() < data_len { return None; }
@@ -168,7 +170,7 @@ impl AckSegment {
         let rest = buf.get(13..)?;
         if rest.len() < count * 4 { return None; }
         let u32_be = |s: &[u8]| u32::from_be_bytes(s.try_into().unwrap());
-        let number_list = rest[..count * 4].as_chunks::<4>().0.iter().copied().map(u32::from_be_bytes).collect();
+        let number_list = rest[..count * 4].chunks_exact(4).map(u32_be).collect();
         Some((Self {
             conv, option,
             receiving_window: u32_be(&buf[0..4]),
