@@ -1,4 +1,6 @@
-use crate::common::errors::{Error, Result};
+use crate::common::errors::Result;
+#[cfg(not(target_os = "linux"))]
+use crate::common::errors::Error;
 use std::net::SocketAddr;
 
 pub fn fake_udp_linux(addr: SocketAddr, _mark: u32) -> Result<tokio::net::UdpSocket> {

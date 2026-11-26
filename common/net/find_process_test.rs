@@ -1,7 +1,9 @@
 #[cfg(test)]
 mod tests {
     use crate::app::router::condition::Rule;
-    use crate::common::net::{Address, Destination, ProcessFinder};
+    use crate::common::net::{Address, Destination};
+    #[cfg(target_os = "windows")]
+    use crate::common::net::ProcessFinder;
     use crate::common::protocol::SessionContext;
     use std::net::{Ipv4Addr, TcpListener, TcpStream};
 
@@ -15,9 +17,9 @@ mod tests {
 
     #[test]
     fn test_find_process_current_pid() {
-        let cur_pid = std::process::id();
         #[cfg(target_os = "windows")]
         {
+            let cur_pid = std::process::id();
             let name = crate::common::net::find_process_windows::find_process_name_by_pid(cur_pid);
             assert!(
                 name.is_some(),
@@ -28,11 +30,10 @@ mod tests {
 
     #[test]
     fn test_find_process_by_listening_tcp_socket() {
-        let (_listener, client, _server) = make_established_pair();
-        let local_addr = client.local_addr().expect("Failed to get local addr");
-
         #[cfg(target_os = "windows")]
         {
+            let (_listener, client, _server) = make_established_pair();
+            let local_addr = client.local_addr().expect("Failed to get local addr");
             let proc_info = ProcessFinder::find_process_by_socket(local_addr, true)
                 .expect("Search should succeed");
             assert!(
