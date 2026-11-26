@@ -132,8 +132,8 @@ fn inbound_ipv6_fragments_reassemble_before_socket_provisioning_and_validate_udp
         if valid_checksum {
             assert_eq!(received.len(), 1);
             assert_eq!(received[0].data, payload);
-            assert_eq!(received[0].source, "[fd77::2]:12345".parse().unwrap());
-            assert_eq!(received[0].destination, "[fd77::1]:9001".parse().unwrap());
+            assert_eq!(received[0].source, "[fd77::2]:12345".parse::<SocketAddr>().unwrap());
+            assert_eq!(received[0].destination, "[fd77::1]:9001".parse::<SocketAddr>().unwrap());
         } else { assert!(received.is_empty(), "reassembly must preserve UDP checksum validation"); }
     }
 }

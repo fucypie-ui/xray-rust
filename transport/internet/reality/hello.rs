@@ -72,7 +72,7 @@ pub(super) fn parse_client_hello(handshake: &[u8]) -> io::Result<ClientHello> {
                 let length = data.u8()?;
                 let versions = data.take(length)?;
                 if !data.done() || versions.len() % 2 != 0 { return Err(invalid()); }
-                tls13 = versions.as_chunks::<2>().0.iter().any(|v| *v == [3, 4]);
+                tls13 = versions.as_chunks::<2>().0.contains(&[3, 4]);
             }
             51 => {
                 let length = data.u16()?;
