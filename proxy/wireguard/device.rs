@@ -122,6 +122,16 @@ impl WireGuardDevice {
 
     pub(crate) fn dns_servers(&self) -> &[IpAddr] { &self.inner.config.dns }
 
+    pub(crate) fn user_for_ip(&self, source: IpAddr) -> Option<crate::common::protocol::User> {
+        let peer = &self.inner.config.peers[route_peer(&self.inner.config, source)?];
+        // The runtime User requires a UUID whereas WireGuard authenticates a
+        // public key. Use a stable custom UUID derived from its public bytes;
+        // authentication has already happened in Noise and cryptokey routing.
+        let mut identity = [0; 16]; identity.copy_from_slice(&peer.public_key[..16]);
+        identity[6] = (identity[6] & 0x0f) | 0x80; identity[8] = (identity[8] & 0x3f) | 0x80;
+        Some(crate::common::protocol::User::with_email(uuid::Uuid::from_bytes(identity), &peer.email, peer.level))
+    }
+
     pub(crate) fn reply_udp(&self, source: SocketAddr, destination: SocketAddr, data: &[u8]) -> Result<()> {
         self.inner.stack().reply_udp(source, destination, data)?;
         self.inner.notify.notify_one(); Ok(())

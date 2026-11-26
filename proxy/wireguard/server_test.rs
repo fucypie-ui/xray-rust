@@ -8,6 +8,7 @@ fn ipc_export_uses_normalized_keys_psk_and_allowed_ips() {
             public_key: "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f".into(),
             pre_shared_key: Some(hex::encode([7;32])), endpoint: "198.51.100.1:51820".into(),
             keepalive: 25, allowed_ips: vec!["10.2.0.7/24".into()],
+            ..WireGuardPeer::default()
         }], ..WireGuardConfig::default()
     };
     // Use an independent Go-derived public key; base64 normalization is tested by

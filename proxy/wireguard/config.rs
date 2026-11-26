@@ -24,12 +24,16 @@ pub struct WireGuardPeer {
     pub keepalive: u16,
     #[serde(default = "default_allowed_ips", rename = "allowedIPs", alias = "allowed_ips")]
     pub allowed_ips: Vec<String>,
+    #[serde(default)]
+    pub email: String,
+    #[serde(default)]
+    pub level: u32,
 }
 
 impl Default for WireGuardPeer {
     fn default() -> Self {
         Self { public_key: String::new(), pre_shared_key: None, endpoint: String::new(),
-            keepalive: 0, allowed_ips: default_allowed_ips() }
+            keepalive: 0, allowed_ips: default_allowed_ips(), email: String::new(), level: 0 }
     }
 }
 
@@ -38,7 +42,7 @@ impl fmt::Debug for WireGuardPeer {
         f.debug_struct("WireGuardPeer").field("public_key", &self.public_key)
             .field("pre_shared_key", &self.pre_shared_key.as_ref().map(|_| "[redacted]"))
             .field("endpoint", &self.endpoint).field("keepalive", &self.keepalive)
-            .field("allowed_ips", &self.allowed_ips).finish()
+            .field("allowed_ips", &self.allowed_ips).field("email", &self.email).field("level", &self.level).finish()
     }
 }
 
@@ -80,8 +84,9 @@ pub fn parse_key(value: &str) -> Result<[u8; 32]> {
     let decoded = if value.len() == 64 && value.bytes().all(|c| c.is_ascii_hexdigit()) {
         hex::decode(value).map_err(|_| Error::Config("invalid WireGuard hexadecimal key".into()))?
     } else {
-        let value = value.trim_end_matches('=');
-        general_purpose::STANDARD_NO_PAD.decode(value)
+        general_purpose::STANDARD.decode(value)
+            .or_else(|_| general_purpose::STANDARD_NO_PAD.decode(value))
+            .or_else(|_| general_purpose::URL_SAFE.decode(value))
             .or_else(|_| general_purpose::URL_SAFE_NO_PAD.decode(value))
             .map_err(|_| Error::Config("invalid WireGuard base64 key".into()))?
     };
@@ -94,6 +99,8 @@ pub(crate) struct ValidatedPeer {
     pub endpoint: String,
     pub keepalive: u16,
     pub allowed_ips: Vec<IpNet>,
+    pub email: String,
+    pub level: u32,
 }
 
 pub(crate) struct ValidatedConfig {
@@ -151,7 +158,7 @@ impl WireGuardConfig {
             let pre_shared_key = peer.pre_shared_key.as_deref().filter(|key| !key.is_empty())
                 .map(parse_key).transpose()?.filter(|key| *key != [0; 32]);
             peers.push(ValidatedPeer { public_key: key, pre_shared_key, endpoint: peer.endpoint.clone(),
-                keepalive: peer.keepalive, allowed_ips });
+                keepalive: peer.keepalive, allowed_ips, email: peer.email.clone(), level: peer.level });
         }
         let dns_text = if self.remote_dns.is_empty() {
             vec!["1.1.1.1".into(), "1.0.0.1".into(), "2606:4700:4700::1111".into(), "2606:4700:4700::1001".into()]

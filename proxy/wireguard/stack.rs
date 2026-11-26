@@ -86,9 +86,6 @@ pub(crate) struct Stack {
 
 impl Stack {
     pub fn new(config: &ValidatedConfig, server: bool, seed: u64) -> io::Result<Self> {
-        if server && config.addresses.len() == 8 {
-            return Err(io_error("WireGuard server supports at most seven base addresses; one slot is reserved for IPv6 forwarding"));
-        }
         let mut device = PacketDevice { incoming: VecDeque::new(), outgoing: VecDeque::new(), mtu: config.mtu };
         let mut iface_config = Config::new(HardwareAddress::Ip);
         iface_config.random_seed = seed;
@@ -192,21 +189,8 @@ impl Stack {
         if !self.closed {
             self.iface.poll_maintenance(now);
             while !self.device.incoming.is_empty() && self.device.outgoing.len() < PACKET_QUEUE {
-                // smoltcp 0.14 AnyIP only forwards IPv4. Install a temporary
-                // IPv6 destination alias for the packet currently being polled.
-                // Socket endpoints remain explicit; no address ever escapes this
-                // private userspace interface or changes host networking.
-                if self.server {
-                    if let Some(IpAddr::V6(destination)) = self.device.incoming.front().and_then(|packet| boringtun::noise::Tunn::dst_address(packet)) {
-                        if !self.addresses.contains(&IpAddr::V6(destination)) {
-                            let base = &self.addresses;
-                            self.iface.update_ip_addrs(|addresses| {
-                                addresses.retain(|cidr| base.contains(&cidr.address().into()));
-                                let _ = addresses.push(IpCidr::new(destination.into(), 128));
-                            });
-                        }
-                    }
-                }
+                // AnyIP applies to both families through InterfaceInner's
+                // shared has_ip_addr check. Keep explicit per-flow endpoints.
                 self.iface.poll_ingress_single(now, &mut self.device, &mut self.sockets);
             }
             // Bound the amount of work and respect the packet queue capacity.
@@ -248,13 +232,16 @@ impl Stack {
 
     pub fn reply_udp(&mut self, source: SocketAddr, destination: SocketAddr, data: &[u8]) -> io::Result<()> {
         if self.closed { return Err(closed()); }
+        let (handle, active) = self.server_udp.get_mut(&source).ok_or_else(|| io_error("WireGuard UDP association expired"))?;
+        *active = Instant::now();
+        let handle = *handle;
         if source.is_ipv6() && data.len() + 48 > self.device.mtu {
             return self.fragment_udp6(source, destination, data);
         }
-        let (handle, active) = self.server_udp.get_mut(&source).ok_or_else(|| io_error("WireGuard UDP association expired"))?;
-        *active = Instant::now();
-        self.sockets.get_mut::<udp::Socket<'_>>(*handle).send_slice(data, destination)
-            .map_err(|e| io_error(e.to_string()))
+        self.sockets.get_mut::<udp::Socket<'_>>(handle).send_slice(data, destination)
+            .map_err(|error| if error == udp::SendError::BufferFull {
+                io::Error::new(io::ErrorKind::WouldBlock, "WireGuard UDP send queue full")
+            } else { io_error(error.to_string()) })
     }
 
     // smoltcp 0.14 reassembles IPv6 but does not emit IPv6 fragments. Adapt
@@ -497,8 +484,11 @@ impl WireGuardUdpSocket {
         }
         let socket = stack.sockets.get_mut::<udp::Socket<'_>>(self.lease.handle);
         if socket.can_send() {
-            let result = socket.send_slice(data, self.destination).map(|()| data.len()).map_err(|e| io_error(e.to_string()));
-            self.lease.inner.notify.notify_one(); Poll::Ready(result)
+            match socket.send_slice(data, self.destination) {
+                Ok(()) => { self.lease.inner.notify.notify_one(); Poll::Ready(Ok(data.len())) }
+                Err(udp::SendError::BufferFull) => { socket.register_send_waker(cx.waker()); Poll::Pending }
+                Err(error) => Poll::Ready(Err(io_error(error.to_string()))),
+            }
         } else { socket.register_send_waker(cx.waker()); Poll::Pending }
     }
     pub(crate) fn poll_recv(&self, cx: &mut Context<'_>, buffer: &mut [u8]) -> Poll<io::Result<usize>> {

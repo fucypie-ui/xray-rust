@@ -29,6 +29,9 @@ fn config(alice: bool, endpoint: &str) -> WireGuardConfig {
 
 #[test]
 fn independent_go_key_vectors_match_boringtun() {
+    use sha2::Digest as _;
+    assert_eq!(hex::encode(sha2::Sha256::digest(include_bytes!("../../testing/wireguard-reference/generated/wireguard-key-vectors.json"))),
+        "711505b1551b672f0cbb84c7135ef1a12f33a21a618e67ee52b72050881ffed0");
     let keys = vectors();
     for (secret, expected) in [(keys.alice_secret, keys.alice_public), (keys.bob_secret, keys.bob_public)] {
         let bytes = super::super::parse_key(&secret).unwrap();
@@ -45,15 +48,17 @@ fn config_camel_case_defaults_and_validation() {
     let keys = vectors();
     let json = serde_json::json!({"secretKey":keys.alice_secret, "peers":[{
         "publicKey":keys.bob_public, "preSharedKey":hex::encode([42;32]),
-        "endpoint":"localhost:51820", "keepAlive":25, "allowedIPs":["10.77.0.0/24"]
+        "endpoint":"localhost:51820", "keepAlive":25, "allowedIPs":["10.77.0.0/24"], "email":"peer@example.com", "level":7
     }], "reserved":[1,2,3], "remoteDNS":["10.77.0.1"]});
     let config: WireGuardConfig = serde_json::from_value(json).unwrap();
     config.validate().unwrap();
     assert_eq!(config.peers[0].keepalive, 25);
     assert_eq!(config.peers[0].allowed_ips, ["10.77.0.0/24"]);
+    assert_eq!(config.peers[0].email, "peer@example.com"); assert_eq!(config.peers[0].level, 7);
     assert_eq!(serde_json::to_value(&config).unwrap()["peers"][0]["keepAlive"], 25);
     assert!(!format!("{config:?}").contains(&config.secret_key));
     let mut invalid = config.clone(); invalid.secret_key = "AA==".into(); assert!(invalid.validate().is_err());
+    let mut invalid = config.clone(); invalid.secret_key = format!("{}===", base64::engine::general_purpose::STANDARD_NO_PAD.encode([7;32])); assert!(invalid.validate().is_err());
     let mut invalid = config.clone(); invalid.secret_key = hex::encode([0;32]); assert!(invalid.validate().is_err());
     let mut invalid = config.clone(); invalid.reserved = Some(vec![0,1]); assert!(invalid.validate().is_err());
     let mut invalid = config.clone(); invalid.mtu = Some(1279); assert!(invalid.validate().is_err());
@@ -402,4 +407,41 @@ async fn native_datagrams_keep_boundaries_original_source_and_multiple_destinati
     tokio::task::yield_now().await; packets.close().await.unwrap();
     assert!(tokio::time::timeout(Duration::from_secs(1), waiting).await.unwrap().unwrap().unwrap().is_none());
     client.close().await.unwrap(); server.close().await.unwrap(); drop(listener);
+}
+
+
+#[test]
+fn preshared_key_authenticates_real_noise_transport() {
+    let source_a: SocketAddr = "127.0.0.1:10001".parse().unwrap();
+    let source_b: SocketAddr = "127.0.0.1:10002".parse().unwrap();
+    let mut config_a = config(true, &source_b.to_string());
+    let mut config_b = config(false, &source_a.to_string());
+    for config in [&mut config_a, &mut config_b] { config.peers[0].pre_shared_key = Some(hex::encode([23;32])); }
+    let mut a = NoisePeers::new(Arc::new(config_a.validated().unwrap()), vec![Some(source_b)]);
+    let mut b = NoisePeers::new(Arc::new(config_b.validated().unwrap()), vec![Some(source_a)]);
+    let packet = udp4([10,77,0,2], [10,77,0,1], b"psk-authenticated payload");
+    let mut encrypted = handshake(&mut a, &mut b, source_a, source_b, packet.clone());
+    let received = b.receive(source_a, &mut encrypted, &mut vec![0; MAX_DATAGRAM + 64]);
+    assert!(received.authenticated); assert_eq!(received.packets, [packet]);
+}
+
+#[tokio::test]
+async fn tcp_half_close_keeps_response_readable_and_peer_metadata() {
+    let mut config_b = config(false, "");
+    config_b.peers[0].email = "alice@example.com".into(); config_b.peers[0].level = 7;
+    let server = Arc::new(WireGuardServer::bind("wg-in", config_b, "127.0.0.1:0".parse().unwrap()).await.unwrap());
+    let client = WireGuardDevice::bind(config(true, &server.local_addr().to_string()), "127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let echo = {
+        let server = server.clone(); tokio::spawn(async move {
+            let mut accepted = server.accept().await.unwrap();
+            let user = accepted.session.user.unwrap(); assert_eq!(user.email, "alice@example.com"); assert_eq!(user.level, 7);
+            let mut payload = Vec::new(); accepted.stream.read_to_end(&mut payload).await.unwrap();
+            accepted.stream.write_all(&payload).await.unwrap(); accepted.stream.shutdown().await.unwrap();
+        })
+    };
+    let mut stream = client.connect_tcp("10.77.0.1:9000".parse().unwrap()).await.unwrap();
+    let payload = vec![42; 16000]; stream.write_all(&payload).await.unwrap(); stream.shutdown().await.unwrap();
+    let mut response = Vec::new();
+    tokio::time::timeout(Duration::from_secs(10), stream.read_to_end(&mut response)).await.unwrap().unwrap();
+    assert_eq!(response, payload); echo.await.unwrap(); client.close().await.unwrap(); server.close().await.unwrap();
 }

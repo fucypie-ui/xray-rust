@@ -115,7 +115,17 @@ impl DatagramTransport for IncomingFlow {
             || packet.source.as_ref().and_then(|source| source.to_socket_addr()) != Some(self.destination) {
             return Err(Error::Protocol("WireGuard UDP response tuple does not match association".into()));
         }
-        self.server.device().reply_udp(self.destination, self.source, &packet.payload)
+        loop {
+            match self.server.device().reply_udp(self.destination, self.source, &packet.payload) {
+                Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    tokio::select! {
+                        biased; _ = self.cancellation.cancelled() => return Err(Error::Closed),
+                        _ = tokio::time::sleep(Duration::from_millis(10)) => {},
+                    }
+                }
+                result => return result,
+            }
+        }
     }
     async fn close(&self) -> Result<()> {
         self.cancellation.cancel(); self.receiver.lock().await.close(); Ok(())

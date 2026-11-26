@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use tokio::sync::Mutex;
 use super::{WireGuardConfig, device::WireGuardDevice, stack::{IncomingUdp, WireGuardTcpStream}};
-use crate::common::{errors::{Error, Result}, net::{Destination, Network}, protocol::SessionContext};
+use crate::common::{errors::{Error, Result}, net::Destination, protocol::SessionContext};
 use crate::features::inbound::InboundResult;
 
 /// An authenticated UDP listener with a userspace TCP acceptor and UDP packet
@@ -23,13 +23,13 @@ impl WireGuardServer {
     pub async fn accept(&self) -> Result<InboundResult> {
         let (stream, source, destination) = self.tcp.lock().await.recv().await.ok_or(Error::Closed)?;
         let mut session = SessionContext::new(&self.tag, Destination::from(destination));
-        session.source = Some(source);
+        session.source = Some(source); session.user = self.device.user_for_ip(source.ip());
         Ok(InboundResult { stream: Box::pin(stream), session })
     }
     pub async fn recv_datagram(&self) -> Result<WireGuardInboundDatagram> {
         let packet = self.udp.lock().await.recv().await.ok_or(Error::Closed)?;
-        let mut session = SessionContext::new(&self.tag, Destination::from(packet.destination));
-        session.destination.network = Network::Udp; session.source = Some(packet.source);
+        let mut session = SessionContext::new(&self.tag, super::datagram::udp_destination(packet.destination));
+        session.source = Some(packet.source); session.user = self.device.user_for_ip(packet.source.ip());
         Ok(WireGuardInboundDatagram { data: packet.data, session, source: packet.source,
             destination: packet.destination, device: self.device.clone() })
     }
