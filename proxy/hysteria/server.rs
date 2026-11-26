@@ -184,8 +184,9 @@ async fn receive_tcp(mut stream: ProxyStream, source: SocketAddr, tag: String, s
     let mut session = SessionContext::new(tag, destination);
     session.source = Some(source); session.user = user;
     let incoming = HysteriaTcpIncoming { session, stream: Box::pin(stream) };
-    if let Err(error) = output.try_send(HysteriaIncoming::Tcp(incoming)) {
-        if let HysteriaIncoming::Tcp(incoming) = error.into_inner() { incoming.reject("server busy").await?; }
+    if let Err(error) = output.try_send(HysteriaIncoming::Tcp(incoming))
+        && let HysteriaIncoming::Tcp(incoming) = error.into_inner() {
+        incoming.reject("server busy").await?;
     }
     Ok(())
 }

@@ -27,9 +27,13 @@ async fn hysteria_go_peer_client_omitted_datagram_parameter() {
                         work.spawn(async move {
                             match incoming.unwrap() {
                                 HysteriaIncoming::Tcp(request) => {
+                                    assert_eq!(request.session.destination.to_string(), "example.com:443");
                                     let incoming = request.accept().await.unwrap();
                                     let (mut read, mut write) = tokio::io::split(incoming.stream);
-                                    tokio::io::copy(&mut read, &mut write).await.unwrap();
+                                    let copied = tokio::io::copy(&mut read, &mut write).await.unwrap();
+                                    assert_eq!(copied, b"Go-to-Rust-QUIC".len() as u64);
+                                    // Reply with FIN before Go closes the whole QUIC connection.
+                                    write.shutdown().await.unwrap();
                                 }
                                 HysteriaIncoming::Udp { session, .. } => {
                                     while let Ok(packet) = session.recv().await { session.send(&packet.address, &packet.data).await.unwrap(); }
@@ -44,10 +48,13 @@ async fn hysteria_go_peer_client_omitted_datagram_parameter() {
         let output = tokio::process::Command::new(peer()).arg("--mode=client").arg(format!("--address={address}"))
             .arg(format!("--root-der={}", hex::encode(der))).arg("--omit-datagram=true")
             .kill_on_drop(true).output().await.unwrap();
-        let _ = done_tx.send(()); server.await.unwrap();
+        let _ = done_tx.send(());
+        let server_result = server.await;
         assert!(output.status.success(), "Go client failed: {}", String::from_utf8_lossy(&output.stderr));
+        server_result.unwrap();
         let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(result["ok"], true); assert_eq!(result["omitted_datagram_parameter"], true);
+        assert_eq!(result["tcp_stream_finished"], true);
     }).await;
 }
 #[tokio::test]

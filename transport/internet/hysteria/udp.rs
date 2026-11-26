@@ -129,8 +129,9 @@ impl DatagramManager {
         let entry = entries.get_mut(&id).expect("inserted UDP session");
         if entry.state.closed.load(Ordering::Acquire) { return; }
         // Invalid/partial fragments never prolong idle sessions.
-        if let Some(message) = entry.defragger.feed(message) {
-            if entry.tx.try_send(DatagramPacket { address: message.address, data: message.data }).is_ok() { entry.state.touch(); }
+        if let Some(message) = entry.defragger.feed(message)
+            && entry.tx.try_send(DatagramPacket { address: message.address, data: message.data }).is_ok() {
+            entry.state.touch();
         }
     }
     pub async fn run(self: Arc<Self>) {

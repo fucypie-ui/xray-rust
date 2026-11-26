@@ -130,7 +130,12 @@ func client(ctx context.Context) error {
     ok, message, err := proxy.ReadTCPResponse(stream); if err != nil { return err }; if !ok { return errors.New(message) }
     payload := []byte("Go-to-Rust-QUIC")
     if _,err=stream.Write(payload); err != nil { return err }
+    // Finish only the send direction so Rust's echo copy observes EOF. Waiting
+    // for its FIN below keeps deferred transport.Close from racing that copy.
+    if err=stream.Close(); err != nil { return err }
     reply := make([]byte,len(payload)); if _,err=io.ReadFull(stream,reply); err != nil { return err }; if !bytes.Equal(reply,payload) { return errors.New("TCP payload mismatch") }
+    var trailing [1]byte
+    if n,err := stream.Read(trailing[:]); n != 0 || err != io.EOF { return fmt.Errorf("TCP echo did not finish: n=%d err=%v",n,err) }
     udp := &proxy.UDPMessage{SessionID:7,PacketID:9,FragCount:1,Addr:"dns.example:53",Data:bytes.Repeat([]byte{0x63},6000)}
     if err=sendMessage(conn,udp); err != nil { return err }
     defragger := new(proxy.Defragger)
@@ -141,5 +146,5 @@ func client(ctx context.Context) error {
         if complete.SessionID != udp.SessionID || complete.Addr != udp.Addr || !bytes.Equal(complete.Data,udp.Data) { return errors.New("UDP echo mismatch") }
         break
     }
-    return json.NewEncoder(os.Stdout).Encode(map[string]interface{}{"ok":true,"omitted_datagram_parameter":*omitDatagram})
+    return json.NewEncoder(os.Stdout).Encode(map[string]interface{}{"ok":true,"omitted_datagram_parameter":*omitDatagram,"tcp_stream_finished":true})
 }
