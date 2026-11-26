@@ -4,8 +4,10 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::future::Future;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::task::JoinSet;
 use tracing::{info, warn};
 
 use crate::debug_panel::{
@@ -43,42 +45,78 @@ struct ProbeRequest {
 
 /// Spawn the debug HTTP + AI API server on `bind_addr` (default `127.0.0.1:19876`).
 pub fn spawn_server(bind_addr: String) -> tokio::task::JoinHandle<()> {
-    // Background 1-second resource sampler so CPU% is always warm and accurate
-    tokio::spawn(async {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
-        loop {
-            interval.tick().await;
-            let _ = resources().sample();
-        }
-    });
-
-    tokio::spawn(async move {
-        let listener = match TcpListener::bind(&bind_addr).await {
-            Ok(l) => l,
-            Err(e) => {
-                warn!("Debug panel HTTP server failed to bind {}: {}", bind_addr, e);
-                return;
-            }
-        };
-        info!(
-            "[DEBUG PANEL] Listening on http://{} (AI API: http://{}/ai/summary)",
-            bind_addr, bind_addr
-        );
-
-        loop {
-            match listener.accept().await {
-                Ok((stream, _peer)) => {
-                    tokio::spawn(async move {
-                        let _ = handle_conn(stream).await;
-                    });
-                }
-                Err(e) => {
-                    warn!("[DEBUG PANEL] Accept error: {}", e);
-                }
-            }
-        }
-    })
+    tokio::spawn(run_server(bind_addr))
 }
+
+pub(super) async fn run_server(bind_addr: String) {
+    run_server_with_sampler(bind_addr, sample_resources()).await;
+}
+
+async fn run_server_with_sampler(
+    bind_addr: String,
+    sampler: impl Future<Output = ()> + Send + 'static,
+) {
+    let listener = match TcpListener::bind(&bind_addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            warn!("Debug panel HTTP server failed to bind {}: {}", bind_addr, e);
+            return;
+        }
+    };
+    info!(
+        "[DEBUG PANEL] Listening on http://{} (AI API: http://{}/ai/summary)",
+        bind_addr, bind_addr
+    );
+
+    serve(listener, sampler, |stream| async move {
+        let _ = handle_conn(stream).await;
+    })
+    .await;
+}
+
+async fn sample_resources() {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+    loop {
+        interval.tick().await;
+        let _ = resources().sample();
+    }
+}
+
+async fn serve<S, C>(
+    listener: TcpListener,
+    sampler: S,
+    mut handle_connection: impl FnMut(TcpStream) -> C + Send,
+) where
+    S: Future<Output = ()> + Send + 'static,
+    C: Future<Output = ()> + Send + 'static,
+{
+    // Dropping the supervisor aborts every child, including stalled HTTP reads.
+    let mut children = JoinSet::new();
+    children.spawn(sampler);
+    loop {
+        tokio::select! {
+            result = children.join_next(), if !children.is_empty() => {
+                if let Some(Err(e)) = result {
+                    warn!("[DEBUG PANEL] Child task failed: {}", e);
+                }
+            }
+            accepted = listener.accept() => {
+                match accepted {
+                    Ok((stream, _peer)) => {
+                        children.spawn(handle_connection(stream));
+                    }
+                    Err(e) => {
+                        warn!("[DEBUG PANEL] Accept error: {}", e);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "server_lifecycle_test.rs"]
+mod lifecycle_test;
 
 async fn handle_conn(mut stream: TcpStream) -> std::io::Result<()> {
     let mut buf = vec![0u8; 16384];

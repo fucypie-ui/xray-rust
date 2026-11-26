@@ -1,16 +1,18 @@
 use async_trait::async_trait;
 use std::net::SocketAddr;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use crate::common::errors::{Error, Result};
-use crate::common::net::{BoxStream, Network};
+use crate::common::net::BoxStream;
 use crate::common::protocol::SessionContext;
 use crate::features::inbound::{InboundHandler, InboundResult};
 use crate::proxy::shadowsocks_2022::config::Shadowsocks2022Config;
-use crate::proxy::shadowsocks_2022::protocol::{HEADER_TYPE_CLIENT, SessionHeader};
+use crate::proxy::shadowsocks_2022::replay::ReplayFilter;
+use crate::proxy::shadowsocks_2022::stream::accept_tcp;
 
 pub struct Server {
     pub tag: String,
     pub config: Shadowsocks2022Config,
+    replay: ReplayFilter,
 }
 
 impl Server {
@@ -18,28 +20,26 @@ impl Server {
         Self {
             tag: tag.into(),
             config,
+            replay: ReplayFilter::default(),
         }
+    }
+
+    pub fn try_new(tag: impl Into<String>, config: Shadowsocks2022Config) -> Result<Self> {
+        config.validate_tcp()?;
+        Ok(Self::new(tag, config))
     }
 }
 
 #[async_trait]
 impl InboundHandler for Server {
     fn tag(&self) -> &str { &self.tag }
-    async fn handle_connection(&self, mut stream: BoxStream, remote_addr: SocketAddr) -> Result<InboundResult> {
-        let header = SessionHeader::decode(&mut stream).await?;
-        if header.header_type != HEADER_TYPE_CLIENT {
-            return Err(Error::Protocol(format!("Expected client header type, got {}", header.header_type)));
-        }
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| Error::Protocol(e.to_string()))?.as_secs();
-        let diff = now.abs_diff(header.timestamp);
-        if diff > 300 {
-            return Err(Error::AuthFailed(format!("Shadowsocks-2022 replay window exceeded: diff = {}s", diff)));
-        }
-        let destination = header.destination.ok_or_else(|| Error::Protocol("Shadowsocks-2022 request missing target destination".into()))?;
-        SessionHeader::new_server(header.session_id).encode(&mut stream).await?;
+    async fn handle_connection(&self, stream: BoxStream, remote_addr: SocketAddr) -> Result<InboundResult> {
+        let (method, key) = self.config.validate_tcp()?;
+        let (destination, stream) = tokio::time::timeout(
+            Duration::from_secs(10), accept_tcp(stream, method, key, &self.replay),
+        ).await.map_err(|_| Error::Timeout)??;
         let mut session = SessionContext::new(&self.tag, destination);
         session.source = Some(remote_addr);
-        session.destination.network = Network::Tcp;
-        Ok(InboundResult { stream, session })
+        Ok(InboundResult { stream: Box::pin(stream), session })
     }
 }

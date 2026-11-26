@@ -7,15 +7,26 @@ import subprocess
 import sys
 
 
-def invoke(binary, arguments):
-    result = subprocess.run(
+def run(binary, arguments):
+    return subprocess.run(
         [str(binary), *arguments], capture_output=True, text=True, timeout=15
     )
+
+
+def invoke(binary, arguments):
+    result = run(binary, arguments)
     if result.returncode != 0:
         raise AssertionError(
             f"{arguments[0]} exited {result.returncode}: {result.stderr.strip()}"
         )
     return result.stdout.rstrip("\n")
+
+
+def expect_usage_error(binary, arguments):
+    result = run(binary, arguments)
+    assert result.returncode == 2, f"Go usage exit mismatch for {arguments[0]}: {arguments[1:]}"
+    assert not result.stdout, f"Usage error wrote stdout: {arguments[0]}"
+    assert result.stderr.strip(), f"Usage error omitted stderr: {arguments[0]}"
 
 
 def standard(value):
@@ -55,6 +66,33 @@ def check(binary, fixture_path):
             assert actual == expected, f"X25519 Go mismatch: {vector['name']}"
             comparisons += 1
     print(f"Built CLI matches pinned Go output in {comparisons} comparisons")
+
+    grammar_checks = 0
+    for command, vector, input_field, expected in [
+        (
+            "mlkem768", vectors["mlkem768"][0], "seed",
+            "Seed: {seed}\nClient: {client}\nHash32: {hash32}",
+        ),
+        (
+            "x25519", vectors["x25519"][0], "input",
+            "PrivateKey: {private_key}\nPassword (PublicKey): {public_key}\nHash32: {hash32}",
+        ),
+    ]:
+        value = vector[input_field]
+        expected = expected.format(**vector)
+        for tail in [["ignored", "--unknown"], ["--", "--unknown", "-i", "bad"]]:
+            assert invoke(binary, [command, "-i", value, *tail]) == expected
+            grammar_checks += 1
+        assert invoke(binary, [command, f"-i={value}"]) == expected
+        grammar_checks += 1
+        for arguments in [[f"-i{value}"], ["--unknown"], ["-i"], ["-h"], ["-help"], ["--help"]]:
+            expect_usage_error(binary, [command, *arguments])
+            grammar_checks += 1
+        label = "ML-KEM-768 seed" if command == "mlkem768" else "X25519 private key"
+        assert invoke(binary, [command, "-i", "!"]) == f"Invalid length of {label}."
+        grammar_checks += 1
+    expect_usage_error(binary, ["x25519", "--std-encoding=maybe"])
+    print(f"Go key command argument and error behavior passed {grammar_checks + 1} checks")
 
 
 if __name__ == "__main__":

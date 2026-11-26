@@ -1,3 +1,6 @@
+//! Legacy metadata codec retained for source compatibility with older callers.
+//! `SessionHeader` is not a SIP022 wire header and is never used by the network
+//! handlers. Real authenticated TCP framing lives in `super::stream`.
 use crate::common::errors::{Error, Result};
 use crate::common::net::Destination;
 use rand::Rng;

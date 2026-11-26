@@ -1,9 +1,10 @@
 use super::curve25519::decode_go_base64;
 use crate::common::errors::{Error, Result};
 use crate::main::commands::base::command::Command;
+use crate::main::cli::{KeyCommandKind, parse_go_key_args};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use clap::{Args, Parser};
+use clap::Args;
 use ml_kem::{DecapsulationKey768, KeyExport, Seed};
 use rand::RngCore;
 
@@ -11,13 +12,6 @@ use rand::RngCore;
 pub struct Mlkem768Options {
     #[arg(short = 'i', long = "i", default_value = "", allow_hyphen_values = true)]
     pub input: String,
-}
-
-#[derive(Parser)]
-#[command(args_override_self = true)]
-struct Mlkem768Cli {
-    #[command(flatten)]
-    options: Mlkem768Options,
 }
 
 /// The seed is the FIPS 203 d || z representation also accepted by Go's
@@ -59,10 +53,9 @@ pub fn execute_mlkem768(options: &Mlkem768Options) -> Result<String> {
 
 pub fn cmd_mlkem768() -> Command {
     Command::new("mlkem768", "xray mlkem768 [-i seed]", "Generate key pair for ML-KEM-768 post-quantum key exchange (VLESS Encryption)").with_run(|args| {
-        let argv = std::iter::once("mlkem768").chain(args.iter().copied()).map(std::ffi::OsString::from);
-        let cli = Mlkem768Cli::try_parse_from(crate::main::cli::normalize_go_flags(argv))
+        let options = parse_go_key_args(KeyCommandKind::Mlkem768, args.iter().copied())
             .map_err(|error| Error::Config(error.to_string()))?;
-        execute_mlkem768(&cli.options)
+        execute_mlkem768(&Mlkem768Options { input: options.input })
     })
 }
 
@@ -164,5 +157,27 @@ mod tests {
         noncanonical.pop();
         noncanonical.push('B');
         assert_eq!(command.execute(&["-i", &noncanonical]).unwrap(), expected);
+    }
+
+    #[test]
+    fn mlkem768_command_adapter_shares_go_flag_terminators_and_usage_errors() {
+        let fixtures = fixture_vectors();
+        let vector = &fixtures["mlkem768"][0];
+        let seed = vector["seed"].as_str().unwrap();
+        let expected = format!("Seed: {seed}\nClient: {}\nHash32: {}",
+            vector["client"].as_str().unwrap(), vector["hash32"].as_str().unwrap());
+        let command = cmd_mlkem768();
+        for terminator in ["ignored", "--", "-", ""] {
+            assert_eq!(command.execute(&["-i", seed, terminator, "--unknown", "-i", "bad", "--help"]).unwrap(), expected);
+        }
+        assert_eq!(command.execute(&[&format!("-i={seed}")]).unwrap(), expected);
+        for flag in [format!("-i{seed}"), format!("--i{seed}"), "--unknown".into(), "-i".into(), "-h".into(), "-help".into(), "--help".into()] {
+            let error = command.execute(&[&flag]).unwrap_err().to_string();
+            assert!(error.contains("usage: xray mlkem768 [-i \"seed (base64.RawURLEncoding)\"]\nRun 'xray help mlkem768' for details.\n"), "{flag}: {error}");
+        }
+        for value in ["--", "-h", "--help"] {
+            assert_eq!(command.execute(&["-i", value]).unwrap(), "Invalid length of ML-KEM-768 seed.");
+        }
+        assert_eq!(command.execute(&["-i", "!"]).unwrap(), "Invalid length of ML-KEM-768 seed.");
     }
 }

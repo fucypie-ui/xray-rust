@@ -1,11 +1,10 @@
 use anyhow::{Context, Result};
-use clap::Parser;
 use std::path::{Path, PathBuf};
 use tracing::info;
 use xray_core::app::log::init_logger_ext;
 use xray_core::core::Instance;
 use xray_core::infra::conf::Config;
-use xray_core::main::cli::{Cli, Commands, TlsCommands, normalize_go_flags};
+use xray_core::main::cli::{Cli, Commands, TlsCommands, try_parse_go_cli};
 use xray_core::main::commands::all::tls::{cert::execute_cert, ping::execute_ping};
 use xray_core::main::commands::all::uuid::generate_uuid;
 use xray_core::main::commands::all::{mlkem768::execute_mlkem768, x25519::execute_x25519};
@@ -40,7 +39,7 @@ fn find_config_path(cli: &Cli) -> Option<PathBuf> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse_from(normalize_go_flags(std::env::args_os()));
+    let cli = try_parse_go_cli(std::env::args_os()).unwrap_or_else(|error| error.exit());
     let (mut log_level, mut log_file) = ("info".to_string(), None);
     if let Some(cfg_path) = find_config_path(&cli)
         && let Ok(cfg) = load_config_file(&resolve_path(&cfg_path)) && let Some(log_cfg) = cfg.log
@@ -117,16 +116,32 @@ mod tests {
 
     #[test]
     fn config_path_is_only_used_for_config_commands() {
-        let cli = Cli::try_parse_from(["xray", "run", "-c", "custom.json"]).unwrap();
+        let cli = try_parse_go_cli(["xray", "run", "-c", "custom.json"]).unwrap();
         assert_eq!(find_config_path(&cli), Some(PathBuf::from("custom.json")));
-        let cli = Cli::try_parse_from(["xray", "uuid"]).unwrap();
+        let cli = try_parse_go_cli(["xray", "uuid"]).unwrap();
         assert_eq!(find_config_path(&cli), None);
         for command in ["x25519", "mlkem768"] {
-            let cli = Cli::try_parse_from(["xray", command, "-i", "seed"]).unwrap();
+            let cli = try_parse_go_cli(["xray", command, "-i", "seed"]).unwrap();
             assert_eq!(find_config_path(&cli), None);
         }
-        let cli = Cli::try_parse_from(["xray"]).unwrap();
+        let cli = try_parse_go_cli(["xray"]).unwrap();
         assert_eq!(find_config_path(&cli), Some(PathBuf::from("config.json")));
+    }
+
+    #[test]
+    fn executable_key_usage_errors_use_stderr_and_exit_two_before_execution() {
+        for command in ["x25519", "mlkem768"] {
+            for flag in ["-h", "-help", "--help", "-iATTACHED", "--unknown", "-i"] {
+                let error = try_parse_go_cli(["xray", command, flag]).unwrap_err();
+                assert!(matches!(&error, xray_core::main::cli::CliParseError::Key(_)));
+                assert_eq!(error.exit_code(), 2);
+                assert!(error.use_stderr());
+                assert!(error.to_string().ends_with(&format!("Run 'xray help {command}' for details.\n")));
+            }
+        }
+        let help = try_parse_go_cli(["xray", "--help"]).unwrap_err();
+        assert_eq!(help.exit_code(), 0);
+        assert!(!help.use_stderr());
     }
 
     #[test]

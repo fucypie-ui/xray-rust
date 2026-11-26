@@ -10,8 +10,8 @@ pub mod probe;
 pub mod resources;
 pub mod server;
 
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::future::Future;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 pub use capture::{CaptureStatus, CapturedPacket, Direction, FlowRecord, PacketCaptureStore, SizeBuckets};
 pub use metrics::{
@@ -30,7 +30,7 @@ pub const DEFAULT_DEBUG_ADDR: &str = "127.0.0.1:19876";
 static METRICS: OnceLock<DebugMetricsStore> = OnceLock::new();
 static RESOURCES: OnceLock<ResourceMonitor> = OnceLock::new();
 static CAPTURE: OnceLock<PacketCaptureStore> = OnceLock::new();
-static SERVER_STARTED: AtomicBool = AtomicBool::new(false);
+static SERVER_OWNER: Mutex<Weak<()>> = Mutex::new(Weak::new());
 
 pub fn metrics() -> &'static DebugMetricsStore {
     METRICS.get_or_init(DebugMetricsStore::new)
@@ -53,17 +53,31 @@ pub fn should_bypass_direct(host: &str) -> bool {
     metrics().should_bypass(host)
 }
 
-/// Start the debug HTTP + AI API server once (idempotent).
+/// Start the debug HTTP + AI API server if no previous server is still running.
 /// Bind address can be overridden via `XRAY_DEBUG_ADDR` env var (default `127.0.0.1:19876`).
 pub fn start_debug_server() -> Option<tokio::task::JoinHandle<()>> {
-    if SERVER_STARTED
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return None;
-    }
     let addr = std::env::var("XRAY_DEBUG_ADDR").unwrap_or_else(|_| DEFAULT_DEBUG_ADDR.to_string());
-    Some(server::spawn_server(addr))
+    spawn_reserved_server(&SERVER_OWNER, server::run_server(addr))
+}
+
+fn spawn_reserved_server(
+    reservation: &Mutex<Weak<()>>,
+    server: impl Future<Output = ()> + Send + 'static,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let owner = Arc::new(());
+    {
+        let mut current = reservation.lock().unwrap_or_else(|e| e.into_inner());
+        if current.upgrade().is_some() {
+            return None;
+        }
+        *current = Arc::downgrade(&owner);
+    }
+    Some(tokio::spawn(async move {
+        // Capture ownership before spawning: even an unpolled abort releases it.
+        // An expired weak token needs no cleanup that could clear a newer owner.
+        let _owner = owner;
+        server.await;
+    }))
 }
 
 #[cfg(test)]

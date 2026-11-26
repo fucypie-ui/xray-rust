@@ -1,7 +1,8 @@
 use super::curve25519::format_curve25519;
 use crate::common::errors::{Error, Result};
 use crate::main::commands::base::command::Command;
-use clap::{Args, Parser};
+use crate::main::cli::{KeyCommandKind, parse_go_bool, parse_go_key_args};
+use clap::Args;
 
 #[derive(Args, Debug, Default)]
 pub struct X25519Options {
@@ -11,31 +12,15 @@ pub struct X25519Options {
     pub std_encoding: bool,
 }
 
-#[derive(Parser)]
-#[command(args_override_self = true)]
-struct X25519Cli {
-    #[command(flatten)]
-    options: X25519Options,
-}
-
-fn parse_go_bool(input: &str) -> std::result::Result<bool, String> {
-    match input {
-        "1" | "t" | "T" | "TRUE" | "true" | "True" => Ok(true),
-        "0" | "f" | "F" | "FALSE" | "false" | "False" => Ok(false),
-        _ => Err(format!("invalid boolean value: {input}")),
-    }
-}
-
 pub fn execute_x25519(options: &X25519Options) -> Result<String> {
     format_curve25519(&options.input, options.std_encoding)
 }
 
 pub fn cmd_x25519() -> Command {
     Command::new("x25519", "xray x25519 [-i key] [--std-encoding]", "Generate key pair for X25519 key exchange (REALITY, VLESS Encryption)").with_run(|args| {
-        let argv = std::iter::once("x25519").chain(args.iter().copied()).map(std::ffi::OsString::from);
-        let cli = X25519Cli::try_parse_from(crate::main::cli::normalize_go_flags(argv))
+        let options = parse_go_key_args(KeyCommandKind::X25519, args.iter().copied())
             .map_err(|error| Error::Config(error.to_string()))?;
-        execute_x25519(&cli.options)
+        execute_x25519(&X25519Options { input: options.input, std_encoding: options.std_encoding })
     })
 }
 
@@ -152,5 +137,33 @@ mod tests {
         let trailing_garbage = format!("{standard}!");
         assert_eq!(command.execute(&["-i", &trailing_garbage, "--std-encoding"]).unwrap(), standard_expected);
         assert_eq!(decode_output(&command.execute(&["-i="]).unwrap(), false).0.len(), 32);
+    }
+
+    #[test]
+    fn x25519_command_adapter_shares_go_flag_terminators_and_usage_errors() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testing/crypto-reference/vectors.json");
+        let json = std::fs::read_to_string(path).unwrap();
+        let fixtures: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let vector = &fixtures["x25519"][0];
+        let input = vector["input"].as_str().unwrap();
+        let expected = format!("PrivateKey: {}\nPassword (PublicKey): {}\nHash32: {}",
+            vector["private_key"].as_str().unwrap(), vector["public_key"].as_str().unwrap(), vector["hash32"].as_str().unwrap());
+        let command = cmd_x25519();
+        for terminator in ["ignored", "--", "-", ""] {
+            assert_eq!(command.execute(&["-i", input, terminator, "--unknown", "-i", "bad", "--help"]).unwrap(), expected);
+        }
+        assert_eq!(command.execute(&[&format!("-i={input}")]).unwrap(), expected);
+        for flag in [format!("-i{input}"), format!("--i{input}"), "--unknown".into(), "-i".into(), "-h".into(), "-help".into(), "--help".into(), "--std-encoding=bad".into()] {
+            let error = command.execute(&[&flag]).unwrap_err().to_string();
+            assert!(error.contains("usage: xray x25519 [-i \"private key (base64.RawURLEncoding)\"] [--std-encoding]\nRun 'xray help x25519' for details.\n"), "{flag}: {error}");
+        }
+        for value in ["--", "-h", "--help"] {
+            assert_eq!(command.execute(&["-i", value]).unwrap(), "Invalid length of X25519 private key.");
+        }
+        let standard = STANDARD.encode(URL_SAFE_NO_PAD.decode(input).unwrap());
+        let output = command.execute(&["-i", &standard, "--std-encoding", "false", "--unknown"]).unwrap();
+        assert_eq!(decode_output(&output, true).0, URL_SAFE_NO_PAD.decode(vector["private_key"].as_str().unwrap()).unwrap());
+        assert_eq!(command.execute(&["-i", "!"]).unwrap(), "Invalid length of X25519 private key.");
     }
 }

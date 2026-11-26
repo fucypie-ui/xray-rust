@@ -1,14 +1,18 @@
 pub mod client;
+pub mod cipher;
 pub mod config;
 #[path = "config.pb.rs"]
 pub mod config_pb;
 pub mod inbound;
 pub mod inbound_multi;
 pub mod inbound_relay;
+pub mod kdf;
 pub mod outbound;
 pub mod protocol;
+pub mod replay;
 pub mod server;
 pub mod shadowsocks_2022;
+pub mod stream;
 pub mod validator;
 
 #[cfg(test)]
