@@ -78,7 +78,7 @@ hickory-resolver = { version = "0.26.4", features = ["system-config", "tokio", "
 hickory-proto = "0.26.4"
 
 # Protocol engines and configuration formats shared with the parity lanes.
-shadowsocks = { version = "=1.25.0", default-features = false, features = ["aead-cipher-extra", "security-replay-attack-detect"] }
+shadowsocks = { version = "=1.25.0", default-features = false, features = ["aead-cipher-extra", "aead-cipher-2022", "security-replay-attack-detect"] }
 shadowsocks-crypto = { version = "0.8.0", default-features = false, features = ["v2"] }
 go-parse-duration = "0.1.1"
 shake = "0.1.0"
