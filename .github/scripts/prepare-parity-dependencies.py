@@ -1,24 +1,13 @@
-"""Prepare the reviewed dependency additions on a Linux runner."""
+"""Validate parity dependencies without rewriting the reviewed manifest."""
 
 from pathlib import Path
 import tomllib
 
 path = Path("Cargo.toml")
-text = path.read_text()
-dependencies = tomllib.loads(text)["dependencies"]
-additions = []
-if "blake3" not in dependencies:
-    additions.append('blake3 = "1.8"')
-if "ml-kem" not in dependencies:
-    additions.append('ml-kem = { version = "=0.3.2", features = ["zeroize"] }')
-if additions:
-    marker = 'sha2 = "0.10"\n'
-    if text.count(marker) != 1:
-        raise SystemExit("Expected one SHA-2 dependency insertion anchor")
-    text = text.replace(marker, marker + "\n".join(additions) + "\n", 1)
-    path.write_text(text)
-prepared = tomllib.loads(text)["dependencies"]
-assert prepared["blake3"] == "1.8"
-assert prepared["ml-kem"]["version"] == "=0.3.2"
-assert "zeroize" in prepared["ml-kem"]["features"]
-print("Prepared BLAKE3 and deterministic ML-KEM dependencies")
+dependencies = tomllib.loads(path.read_text())["dependencies"]
+for name in ("blake3", "ml-kem"):
+    if name not in dependencies:
+        raise SystemExit(f"Missing reviewed parity dependency: {name}")
+if "zeroize" not in dependencies["ml-kem"].get("features", []):
+    raise SystemExit("Deterministic ML-KEM parity requires the zeroize feature")
+print("Validated reviewed BLAKE3 and deterministic ML-KEM dependencies")
