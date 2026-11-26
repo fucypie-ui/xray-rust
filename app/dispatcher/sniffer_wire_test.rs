@@ -103,13 +103,35 @@ fn tls_malformed_sni_lengths_and_cipher_suites_are_rejected() {
     for index in [offset - 1, offset - 3, offset - 6, 45] {
         let mut invalid = data.clone();
         // Name length, name type, extension length, odd cipher-suite length.
-        invalid[index] ^= 1;
+        // For the name length, increment past the available 17 bytes.
+        invalid[index] += 1;
         assert_error(&sniffer, &invalid, Network::Tcp, "unknown content");
         assert!(Sniffer::sniff_tls_sni(&invalid).is_none());
     }
     let mut trailing_dot = data.clone();
     trailing_dot[offset + name.len() - 1] = b'.';
     assert_error(&sniffer, &trailing_dot, Network::Tcp, "unknown content");
+}
+
+#[test]
+fn tls_go_extracts_shorter_declared_sni_bytes() {
+    let sniffer = Sniffer::new(None);
+    let mut data = packet(TLS_VECTORS[0].0);
+    let name = TLS_VECTORS[0].1.as_bytes();
+    let offset = data.windows(name.len()).position(|window| window == name).unwrap();
+    let declared = u16::from_be_bytes([data[offset - 2], data[offset - 1]]);
+    assert_eq!(usize::from(declared), name.len());
+    assert_eq!(sniffer.sniff(&data, Network::Tcp).unwrap().domain(), "c.s-microsoft.com");
+    data[offset - 2..offset].copy_from_slice(&(declared - 1).to_be_bytes());
+    // Go ReadClientHello returns d[:nameLen] immediately for nameType == 0,
+    // without validating bytes left in the otherwise unchanged SNI list.
+    // This in-memory mutation tests byte extraction only, not DNS existence.
+    // The captured fixture and its original hostname remain unchanged.
+    let expected_bytes = &name[..name.len() - 1];
+    let result = sniffer.sniff(&data, Network::Tcp).unwrap();
+    assert_eq!(result.protocol(), "tls");
+    assert_eq!(result.domain().as_bytes(), expected_bytes);
+    assert_eq!(Sniffer::sniff_tls_sni(&data).unwrap().as_bytes(), expected_bytes);
 }
 
 #[test]
