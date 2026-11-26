@@ -3066,6 +3066,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "shadowsocks-crypto"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b404a62ebea5003f44b9a2748dee7555c5f9ae39896508e466a2a91ee6fa5df5"
+dependencies = [
+ "aes",
+ "aes-gcm",
+ "blake3",
+ "bytes",
+ "cfg-if",
+ "chacha20poly1305 0.11.0",
+ "rand 0.10.4",
+]
+
+[[package]]
 name = "shake"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4203,6 +4218,7 @@ dependencies = [
  "serde_yaml_ng",
  "sha1",
  "sha2",
+ "shadowsocks-crypto",
  "shake",
  "smoltcp",
  "socket2",

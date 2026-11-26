@@ -18,8 +18,6 @@ pub mod wireguard;
 
 #[cfg(test)]
 pub mod proxy_test;
-#[cfg(test)]
-mod outbound_dialer_test;
 
 pub use dns::DnsOutbound;
 pub use loopback::LoopbackOutbound;
