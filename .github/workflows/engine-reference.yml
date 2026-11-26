@@ -63,6 +63,11 @@ jobs:
           bash "testing/$REFERENCE_ENGINE-reference/generate.sh" \
             "$GITHUB_WORKSPACE/go-reference" "$output_directory" \
             2>&1 | tee "$output_directory/generator.log"
+          if [[ $REFERENCE_ENGINE == reality ]]; then
+            bash testing/reality-reference/build-peer.sh \
+              "$GITHUB_WORKSPACE/go-reference" "$output_directory" \
+              2>&1 | tee "$output_directory/build-peer.log"
+          fi
           git -C go-reference diff --exit-code
           [[ -z $(git -C go-reference status --porcelain) ]]
           (
