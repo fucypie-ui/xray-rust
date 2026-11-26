@@ -3,6 +3,7 @@ use crate::{common::{net::{Destination, Network}, protocol::User}, features::inb
 use base64::Engine as _;
 use std::{io::Cursor, time::Duration};
 use serde::Deserialize;
+use sha2::Digest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const METHODS: [CipherMethod; 3] = [CipherMethod::Aes128Gcm, CipherMethod::Aes256Gcm, CipherMethod::ChaCha20Poly1305];
@@ -33,7 +34,13 @@ struct ExtendedVector {
 fn ss2022_extended_go_vectors_engine_tcp_eih_and_udp() {
     // Fail explicitly if the remote-produced fixture has not yet been frozen.
     // Do not substitute Rust-produced bytes for independent Go evidence.
-    let file = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/proxy/shadowsocks_2022/testdata/go-extended-vectors.jsonl")).expect("run the remote generate-extended.sh and freeze its Go JSONL");
+    let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/proxy/shadowsocks_2022/testdata/go-extended-vectors.jsonl")).expect("run the remote generate-extended.sh and freeze its Go JSONL");
+    assert_eq!(
+        hex::encode(sha2::Sha256::digest(&bytes)),
+        "349343ccb3730746d51afa5bfef25470d7184fccc9476eeeb8343c81278fb9b0",
+        "independent Go fixture checksum mismatch; never replace the expected digest to match Rust output",
+    );
+    let file = std::str::from_utf8(&bytes).expect("independent Go fixture must be UTF-8");
     let vectors: Vec<ExtendedVector> = file.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
     assert_eq!(vectors.len(), 3);
     let mut methods = Vec::new();
