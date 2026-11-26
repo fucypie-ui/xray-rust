@@ -38,6 +38,10 @@ jobs:
             filter: hysteria_go_peer
             minimum: 2
             mode: --ignored
+          - engine: kcp
+            filter: transport::internet::kcp::go_peer_test
+            minimum: 2
+            mode: --ignored
     defaults:
       run:
         shell: bash
@@ -84,6 +88,11 @@ jobs:
               bash testing/hysteria-reference/build-peer.sh "$GITHUB_WORKSPACE/go-reference" "$output_directory/hysteria-go-peer"
               test -x "$output_directory/hysteria-go-peer"
               printf 'XRAY_HYSTERIA_GO_PEER=%s/hysteria-go-peer\n' "$output_directory" >> "$GITHUB_ENV"
+              ;;
+            kcp)
+              bash testing/kcp-reference/build-peer.sh "$GITHUB_WORKSPACE/go-reference" "$output_directory/kcp-go-peer"
+              test -x "$output_directory/kcp-go-peer"
+              printf 'XRAY_KCP_GO_PEER=%s/kcp-go-peer\n' "$output_directory" >> "$GITHUB_ENV"
               ;;
             *) exit 2 ;;
           esac

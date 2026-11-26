@@ -36,3 +36,5 @@ pub use sending::SendingWindow;
 mod scen_kcp_test;
 #[cfg(test)]
 mod runtime_test;
+#[cfg(test)]
+mod go_peer_test;
