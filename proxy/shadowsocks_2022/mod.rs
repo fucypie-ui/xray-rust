@@ -33,6 +33,10 @@ pub mod multi_server;
 pub mod relay_server;
 pub mod packet;
 pub mod udp_session;
+mod native;
+
+#[cfg(test)]
+mod native_test;
 
 #[cfg(test)]
 mod extended_test;

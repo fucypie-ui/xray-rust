@@ -1,8 +1,8 @@
 //! Authenticated AES multi-user TCP inbound; compatibility metadata types live separately.
-use std::{collections::HashMap, io, net::SocketAddr, sync::RwLock, time::Duration};
+use std::{collections::HashMap, io, net::SocketAddr, sync::{Arc, RwLock}, time::Duration};
 use async_trait::async_trait;
 use tokio::io::AsyncReadExt;
-use crate::{common::{errors::{Error, Result}, net::BoxStream, protocol::{SessionContext, User}}, features::inbound::{InboundHandler, InboundResult}};
+use crate::{common::{errors::{Error, Result}, net::BoxStream, protocol::{SessionContext, User}}, features::inbound::{InboundHandler, InboundResult, NativeInboundListener}};
 use super::{cipher::{CipherMethod, invalid_data}, identity::tcp_identity, kdf::user_psk_hash, replay::ReplayFilter, stream::accept_tcp_with_salt};
 
 #[derive(Clone)]
@@ -15,19 +15,26 @@ struct Accounts {
     count: usize,
 }
 
+#[derive(Clone)]
 pub struct MultiUserServer {
     tag: String,
     pub(crate) method: CipherMethod,
     pub(crate) master_key: Vec<u8>,
-    accounts: RwLock<Accounts>,
-    replay: ReplayFilter,
-    datagrams: std::sync::Mutex<super::udp_session::ServerUdpSessions>,
+    accounts: Arc<RwLock<Accounts>>,
+    replay: Arc<ReplayFilter>,
+    datagrams: Arc<std::sync::Mutex<super::udp_session::ServerUdpSessions>>,
+    networks: super::config::Networks,
+    native: Arc<super::native::NativeState>,
 }
 
 impl MultiUserServer {
     pub fn new(tag: impl Into<String>, method: CipherMethod, master_key: Vec<u8>) -> Result<Self> {
         if method.is_chacha() || master_key.len() != method.key_length() { return Err(Error::Config("SS2022 multi-user requires an AES method and a valid master key".into())); }
-        Ok(Self { tag: tag.into(), method, master_key, accounts: RwLock::new(Accounts::default()), replay: ReplayFilter::default(), datagrams: std::sync::Mutex::new(super::udp_session::ServerUdpSessions::new(method)) })
+        Ok(Self { tag: tag.into(), method, master_key, accounts: Arc::new(RwLock::new(Accounts::default())), replay: Arc::new(ReplayFilter::default()), datagrams: Arc::new(std::sync::Mutex::new(super::udp_session::ServerUdpSessions::new(method))), networks: super::config::Networks::BOTH, native: Arc::new(super::native::NativeState::default()) })
+    }
+    pub fn with_network(mut self, network: Option<&str>) -> Result<Self> {
+        self.networks = super::config::Networks::parse(network)?;
+        Ok(self)
     }
     pub fn add_account(&self, account: UserAccount) -> Result<()> {
         if account.key.len() != self.method.key_length() {
@@ -98,20 +105,32 @@ impl MultiUserServer {
 #[async_trait]
 impl InboundHandler for MultiUserServer {
     fn tag(&self) -> &str { &self.tag }
+    async fn close(&self) -> Result<()> { self.native.close(); Ok(()) }
+    async fn bind_native(&self, address: SocketAddr) -> Result<Option<Box<dyn NativeInboundListener>>> {
+        super::native::bind(self.clone(), self.networks, &self.native, address).await
+    }
     async fn handle_connection(&self, stream: BoxStream, remote: SocketAddr) -> Result<InboundResult> {
+        if !self.networks.tcp { return Err(Error::Unsupported("SS2022 multi-user inbound TCP is disabled".into())); }
         tokio::time::timeout(Duration::from_secs(10), self.accept(stream, remote)).await.map_err(|_| Error::Timeout)?
     }
 }
 
+impl super::native::PacketServer for MultiUserServer {
+    fn decode(&self, wire: &[u8], remote: SocketAddr) -> Result<super::udp_session::InboundDatagram> { self.decode_datagram(wire, remote) }
+    fn reply(&self, token: &super::udp_session::ReplyToken, source: crate::common::net::Destination, payload: &[u8]) -> Result<(SocketAddr, Vec<u8>)> { self.reply_datagram(token, source, payload) }
+}
+
 impl MultiUserServer {
     pub fn decode_datagram(&self, wire: &[u8], remote: SocketAddr) -> Result<super::udp_session::InboundDatagram> {
-        use super::{identity::{HeaderCipher, udp_identity}, packet::{PacketCodec, MAX_DATAGRAM_SIZE, decrypt_header}, stream::unix_time};
+        self.decode_datagram_at(wire, remote, super::stream::unix_time()?)
+    }
+    pub(super) fn decode_datagram_at(&self, wire: &[u8], remote: SocketAddr, now: u64) -> Result<super::udp_session::InboundDatagram> {
+        use super::{identity::{HeaderCipher, udp_identity}, packet::{PacketCodec, MAX_DATAGRAM_SIZE, decrypt_header}};
         if wire.len() < 48 || wire.len() > MAX_DATAGRAM_SIZE { return Err(invalid_data("invalid EIH UDP packet length").into()); }
         let raw = decrypt_header(self.method, &self.master_key, &wire[..16])?;
         let eih = wire[16..32].try_into().map_err(|_| invalid_data("short UDP EIH"))?;
         let hash = udp_identity(&HeaderCipher::new(self.method, &self.master_key)?, &raw, &eih);
         let account = self.account(&hash)?;
-        let now = unix_time()?;
         let packet = PacketCodec::new(self.method, vec![account.key.clone()])?.decode_aes_body_at(&raw, &wire[32..], now)?;
         Ok(self.datagrams.lock().map_err(|_| io::Error::other("SS2022 UDP lock poisoned"))?.accept_at(packet, account.key, Some(account.user), remote, now)?)
     }

@@ -93,6 +93,9 @@ impl ClientUdpSession {
 // Pointer identity binds a token to one handler and one live session generation.
 // Reusing a client ID after expiry cannot redirect an earlier request's replies.
 pub struct ReplyToken { session_id: u64, binding: Arc<()> }
+impl ReplyToken {
+    pub(crate) fn same_session(&self, other: &Self) -> bool { self.session_id == other.session_id && Arc::ptr_eq(&self.binding, &other.binding) }
+}
 
 pub struct InboundDatagram {
     pub packet: DecodedPacket,
@@ -147,7 +150,20 @@ impl ServerUdpSessions {
 
 /// Real connected UDP association for integration by the shared outbound runtime.
 /// Each send/recv operation preserves one datagram; no bridge tasks are spawned.
-pub struct UdpAssociation { socket: tokio::net::UdpSocket, session: std::sync::Mutex<ClientUdpSession> }
+pub struct UdpAssociation {
+    shared: Arc<AssociationSocket>,
+    session: std::sync::Mutex<ClientUdpSession>,
+}
+pub(super) struct AssociationSocket {
+    socket: std::sync::Mutex<Option<Arc<tokio::net::UdpSocket>>>,
+    closed: tokio_util::sync::CancellationToken,
+}
+impl AssociationSocket {
+    pub(super) fn close(&self) {
+        self.closed.cancel();
+        self.socket.lock().unwrap_or_else(|error| error.into_inner()).take();
+    }
+}
 impl UdpAssociation {
     pub async fn connect(server: &Destination, method: CipherMethod, psks: Vec<Vec<u8>>) -> io::Result<Self> {
         let session = ClientUdpSession::new(method, psks)?;
@@ -163,24 +179,56 @@ impl UdpAssociation {
                 Err(error) => { last_error = error; continue; }
             };
             match socket.connect(address).await {
-                Ok(()) => return Ok(Self { socket, session: std::sync::Mutex::new(session) }),
+                Ok(()) => return Ok(Self { shared: Arc::new(AssociationSocket { socket: std::sync::Mutex::new(Some(Arc::new(socket))), closed: tokio_util::sync::CancellationToken::new() }), session: std::sync::Mutex::new(session) }),
                 Err(error) => last_error = error,
             }
         }
         Err(last_error)
     }
+    fn socket(&self) -> io::Result<Arc<tokio::net::UdpSocket>> {
+        self.shared.socket.lock().map_err(|_| io::Error::other("UDP socket lock poisoned"))?.clone().ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "UDP association closed"))
+    }
+    pub fn local_addr(&self) -> io::Result<SocketAddr> { self.socket()?.local_addr() }
+    pub fn is_closed(&self) -> bool { self.shared.closed.is_cancelled() }
+    pub(super) fn downgrade(&self) -> std::sync::Weak<AssociationSocket> { Arc::downgrade(&self.shared) }
+    /// Closing releases the owned socket and wakes pending receives and sends.
+    /// A caller's cancelled send has already reserved its packet ID.
+    pub fn close(&self) {
+        self.shared.close();
+    }
+    pub(super) fn encode(&self, destination: Destination, payload: &[u8]) -> io::Result<Vec<u8>> {
+        if self.is_closed() { return Err(io::Error::new(io::ErrorKind::BrokenPipe, "UDP association closed")); }
+        self.session.lock().map_err(|_| io::Error::other("UDP session lock poisoned"))?.encode(destination, payload)
+    }
     pub async fn send(&self, destination: Destination, payload: &[u8]) -> io::Result<()> {
-        let wire = self.session.lock().map_err(|_| io::Error::other("UDP session lock poisoned"))?.encode(destination, payload)?;
-        let written = self.socket.send(&wire).await?;
+        let wire = self.encode(destination, payload)?;
+        self.send_wire(&wire).await
+    }
+    pub(super) async fn send_wire(&self, wire: &[u8]) -> io::Result<()> {
+        let socket = self.socket()?;
+        let written = tokio::select! {
+            biased;
+            _ = self.shared.closed.cancelled() => return Err(io::Error::new(io::ErrorKind::BrokenPipe, "UDP association closed")),
+            written = socket.send(wire) => written?,
+        };
         if written != wire.len() { return Err(io::Error::new(io::ErrorKind::WriteZero, "short UDP datagram write")); }
         Ok(())
     }
     pub async fn recv(&self) -> io::Result<(Destination, Vec<u8>)> {
+        let socket = self.socket()?;
         let mut wire = vec![0; super::packet::MAX_DATAGRAM_SIZE + 1];
         loop {
-            let length = self.socket.recv(&mut wire).await?;
+            let length = tokio::select! {
+                biased;
+                _ = self.shared.closed.cancelled() => return Err(io::Error::new(io::ErrorKind::BrokenPipe, "UDP association closed")),
+                received = socket.recv(&mut wire) => received?,
+            };
             let decoded = self.session.lock().map_err(|_| io::Error::other("UDP session lock poisoned"))?.decode(&wire[..length]);
-            if let Ok(packet) = decoded { return Ok((packet.destination, packet.payload)); }
+            match decoded {
+                Ok(packet) => return Ok((packet.destination, packet.payload)),
+                Err(error) if error.kind() == io::ErrorKind::InvalidData => continue,
+                Err(error) => return Err(error),
+            }
         }
     }
 }

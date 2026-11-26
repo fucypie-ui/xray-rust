@@ -16,6 +16,14 @@ pub struct RelayServer {
 }
 
 impl RelayServer {
+    /// Native UDP relay routes need a separate cached, passthrough lifecycle.
+    /// Never accept UDP settings and silently start the TCP fallback instead.
+    pub fn with_network(self, network: Option<&str>) -> Result<Self> {
+        if super::config::Networks::parse(network)?.udp {
+            return Err(Error::Unsupported("SS2022 native relay UDP route lifecycle is not implemented".into()));
+        }
+        Ok(self)
+    }
     pub fn new(tag: impl Into<String>, method: CipherMethod, key: Vec<u8>, targets: Vec<RelayTarget>) -> Result<Self> {
         if method.is_chacha() || key.len() != method.key_length() { return Err(Error::Config("SS2022 relay requires an AES method and a valid key".into())); }
         let mut by_hash = HashMap::new();

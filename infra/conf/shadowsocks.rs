@@ -62,6 +62,29 @@ use std::sync::Arc;
 
 fn is_2022(method: &str) -> bool { method.to_ascii_lowercase().starts_with("2022-") }
 
+fn network_selection(value: Option<&Value>, default: &str) -> Result<String> {
+    let Some(value) = value.filter(|value| !value.is_null()) else { return Ok(default.into()); };
+    let networks: Vec<&str> = match value {
+        Value::String(networks) => networks.split(',').collect(),
+        Value::Array(networks) => networks.iter().map(|network| {
+            network.as_str().ok_or_else(|| Error::Config("SS2022 network entries must be strings".into()))
+        }).collect::<Result<_>>()?,
+        _ => return Err(Error::Config("SS2022 network must be a string or string array".into())),
+    };
+    // Empty native network lists select both transports in Go's SS2022 constructors.
+    let mut tcp = networks.is_empty();
+    let mut udp = networks.is_empty();
+    for network in networks {
+        // Go's Network.Build folds case without trimming whitespace.
+        match network.to_ascii_lowercase().as_str() {
+            "tcp" => tcp = true,
+            "udp" => udp = true,
+            _ => return Err(Error::Unsupported(format!("SS2022 network is not supported: {network}"))),
+        }
+    }
+    Ok(if tcp && udp { "tcp,udp" } else if udp { "udp" } else { "tcp" }.into())
+}
+
 // Inspect the original JSON before generic settings normalization can discard
 // users, PSK chains or UDP options. Unsupported SS2022 must never reach legacy SS.
 fn contains_2022(value: &Value) -> bool {
@@ -87,11 +110,7 @@ fn reject_packet_options(value: &Value) -> Result<()> {
     if value.get("uot").is_some_and(|uot| !uot.is_null() && uot != &Value::Bool(false)) {
         return Err(Error::Unsupported("SS2022 UDP-over-TCP is not implemented".into()));
     }
-    if let Some(network) = value.get("network").filter(|network| !network.is_null())
-        && !network.as_str().is_some_and(|network| network.eq_ignore_ascii_case("tcp"))
-    {
-        return Err(Error::Unsupported("SS2022 native UDP requires shared datagram runtime integration".into()));
-    }
+    network_selection(value.get("network"), "tcp")?;
     Ok(())
 }
 
@@ -131,7 +150,10 @@ pub(crate) fn build_2022_inbound(
     let Some(raw) = raw.filter(|raw| contains_2022(raw)) else { return Ok(None); };
     reject_packet_options(raw)?;
     validate_2022_transport(stream)?;
-    let settings: ShadowsocksServerConfig = serde_json::from_value(raw.clone())
+    let mut settings = raw.clone();
+    // JSON omission means TCP in Go; native constructors default to both.
+    settings["network"] = Value::String(network_selection(raw.get("network"), "tcp")?);
+    let settings: ShadowsocksServerConfig = serde_json::from_value(settings)
         .map_err(|error| Error::Config(format!("Invalid SS2022 inbound settings: {error}")))?;
     if !is_2022(&settings.method) || raw.get("servers").is_some_and(|servers| !servers.is_null()) {
         return Err(Error::Unsupported("SS2022 inbound requires one settings.method/password pair".into()));
@@ -159,7 +181,8 @@ pub(crate) fn build_2022_inbound(
         }
         let master = parse_key(&settings.password, method.key_length())?;
         let relay_mode = users[0].address.is_some();
-        let server = MultiUserServer::new(tag, method, master.clone())?;
+        let server = MultiUserServer::new(tag, method, master.clone())?
+            .with_network(settings.network.as_deref())?;
         let mut targets = Vec::new();
         for (index, raw_user) in users.into_iter().enumerate() {
             if !raw_user.method.as_deref().unwrap_or_default().is_empty() {
@@ -181,7 +204,8 @@ pub(crate) fn build_2022_inbound(
             }
         }
         if relay_mode {
-            return Ok(Some(Arc::new(RelayServer::new(tag, method, master, targets)?)));
+            return Ok(Some(Arc::new(RelayServer::new(tag, method, master, targets)?
+                .with_network(settings.network.as_deref())?)));
         }
         return Ok(Some(Arc::new(server)));
     }
@@ -242,11 +266,166 @@ mod ss2022_tests {
     const KEY: &str = "AAECAwQFBgcICQoLDA0ODw==";
 
     #[test]
+    fn ss2022_network_selection_normalizes_json_and_preserves_go_defaults() {
+        assert_eq!(network_selection(None, "tcp").unwrap(), "tcp");
+        assert_eq!(network_selection(Some(&Value::Null), "tcp").unwrap(), "tcp");
+        assert_eq!(network_selection(None, "tcp,udp").unwrap(), "tcp,udp");
+        for (value, expected) in [
+            (json!("tcp"), "tcp"), (json!(["TCP"]), "tcp"),
+            (json!("udp"), "udp"), (json!(["UDP"]), "udp"),
+            (json!("tcp,udp"), "tcp,udp"), (json!("UDP,TCP"), "tcp,udp"),
+            (json!(["tcp", "udp"]), "tcp,udp"), (json!([]), "tcp,udp"),
+            (json!(["UDP", "tcp", "udp"]), "tcp,udp"),
+        ] {
+            assert_eq!(network_selection(Some(&value), "tcp").unwrap(), expected, "{value}");
+        }
+        for value in [
+            json!(false), json!(1), json!({}), json!([null]), json!(["tcp", false]),
+            json!(""), json!("unix"), json!("tcp,"),
+            json!(["tcp,udp"]), json!(["unknown"]),
+        ] {
+            assert!(network_selection(Some(&value), "tcp").is_err(), "accepted {value}");
+        }
+        for value in [
+            json!(" UDP "), json!(" TCP , UDP "), json!("tcp, udp"), json!("tcp ,udp"),
+            json!([" UDP ", " tcp "]), json!([" UDP ", "tcp"]),
+        ] {
+            assert!(matches!(network_selection(Some(&value), "tcp"), Err(Error::Unsupported(_))), "accepted whitespace network {value}");
+        }
+    }
+
+    #[tokio::test]
+    async fn ss2022_runtime_config_preserves_inbound_network_selection() {
+        for (method, key) in [
+            (METHOD, KEY),
+            ("2022-blake3-aes-256-gcm", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="),
+            ("2022-blake3-chacha20-poly1305", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="),
+        ] {
+            for users_field in [None, Some("users"), Some("clients")] {
+                if users_field.is_some() && method.contains("chacha") { continue; }
+                for (network, tcp, udp) in [
+                    (None, true, false), (Some(Value::Null), true, false),
+                    (Some(json!("tcp")), true, false), (Some(json!(["TCP"])), true, false),
+                    (Some(json!("udp")), false, true), (Some(json!(["UDP"])), false, true),
+                    (Some(json!("tcp,udp")), true, true),
+                    (Some(json!(["UDP", "tcp", "UDP"])), true, true), (Some(json!([])), true, true),
+                ] {
+                    let mut settings = json!({"method": method, "password": key});
+                    if let Some(network) = &network { settings["network"] = network.clone(); }
+                    if let Some(field) = users_field { settings[field] = json!([{"password": key, "email": "user@example", "level": 4}]); }
+                    let config: Config = serde_json::from_value(json!({"inbounds": [{
+                        "tag": "ss-in", "protocol": "shadowsocks", "listen": "127.0.0.1", "port": 8388,
+                        "settings": settings,
+                    }]})).unwrap();
+                    let handler = config.build().unwrap().inbounds.remove(0).1;
+                    let native = handler.bind_native("127.0.0.1:0".parse().unwrap()).await.unwrap();
+                    assert_eq!(native.is_some(), udp, "{method} users={users_field:?} network={network:?}");
+                    if let Some(native) = native {
+                        let address = native.local_addr().unwrap();
+                        assert!(tokio::net::UdpSocket::bind(address).await.is_err(), "UDP listener missing");
+                        let tcp_probe = tokio::net::TcpListener::bind(address).await;
+                        assert_eq!(tcp_probe.is_err(), tcp, "wrong TCP selection for {network:?}");
+                        drop(tcp_probe);
+                        if !tcp {
+                            let (stream, _peer) = tokio::io::duplex(64);
+                            let result = tokio::time::timeout(
+                                Duration::from_secs(1), handler.handle_connection(Box::pin(stream), address),
+                            ).await.expect("UDP-only handler attempted a TCP handshake");
+                            assert!(matches!(result, Err(Error::Unsupported(_))));
+                        }
+                        drop(native);
+                        let udp_probe = tokio::net::UdpSocket::bind(address).await.expect("native listener retained UDP socket");
+                        let tcp_probe = tokio::net::TcpListener::bind(address).await.expect("native listener retained TCP socket");
+                        drop((udp_probe, tcp_probe));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ss2022_runtime_relay_keeps_tcp_and_rejects_native_udp() {
+        for field in ["users", "clients"] {
+            for network in [None, Some(Value::Null), Some(json!("tcp")), Some(json!(["TCP"]))] {
+                let mut settings = json!({"method": METHOD, "password": KEY});
+                settings[field] = json!([{"password": KEY, "address": "next-hop", "port": 8389}]);
+                if let Some(network) = network { settings["network"] = network; }
+                assert!(build_2022_inbound("relay", Some(&settings), None).unwrap().is_some());
+            }
+            for network in [json!("udp"), json!("tcp,udp"), json!(["UDP", "TCP"]), json!([])] {
+                let mut settings = json!({"method": METHOD, "password": KEY, "network": network});
+                settings[field] = json!([{"password": KEY, "address": "next-hop", "port": 8389}]);
+                let config: Config = serde_json::from_value(json!({"inbounds": [{
+                    "protocol": "shadowsocks", "port": 8388, "settings": settings,
+                }]})).unwrap();
+                let error = config.build().err().expect("relay UDP must fail during configuration");
+                assert!(matches!(error, Error::Unsupported(message) if message.contains("relay")), "wrong rejection for {network}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn ss2022_runtime_outbound_selects_datagrams_from_session_destination() {
+        for (method, key) in [
+            (METHOD, KEY),
+            ("2022-blake3-aes-256-gcm", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="),
+            ("2022-blake3-chacha20-poly1305", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="),
+        ] {
+            let peer = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            for nested in [false, true] {
+                for network in [
+                    None, Some(Value::Null), Some(json!("tcp")), Some(json!("udp")),
+                    Some(json!("tcp,udp")), Some(json!(["UDP", "TCP"])), Some(json!([])),
+                ] {
+                    let mut endpoint = json!({"address": "127.0.0.1", "port": peer.local_addr().unwrap().port(), "method": method, "password": key});
+                    if let Some(network) = &network { endpoint["network"] = network.clone(); }
+                    let mut settings = if nested { json!({"servers": [endpoint]}) } else { endpoint };
+                    if let Some(network) = network { settings["network"] = network; }
+                    let config: Config = serde_json::from_value(json!({"outbounds": [{
+                        "tag": "ss-out", "protocol": "shadowsocks", "settings": settings,
+                    }]})).unwrap();
+                    let handler = config.build().unwrap().outbounds.remove("ss-out").unwrap();
+                    let session = SessionContext::new("test", Destination::udp("127.0.0.1".parse().unwrap(), 53));
+                    let packets = handler.connect_datagram(&session).await.expect("configured SS2022 outbound lost UDP trait");
+                    packets.close().await.unwrap();
+                    let session = SessionContext::new("test", Destination::from_domain_port("example.com", 443));
+                    assert!(matches!(handler.connect_datagram(&session).await, Err(Error::Unsupported(_))));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ss2022_runtime_rejects_invalid_network_shapes_at_factory_boundary() {
+        for network in [
+            json!(false), json!(1), json!({}), json!([null]), json!(["tcp", false]),
+            json!(""), json!("unix"), json!("tcp,"), json!(["tcp,udp"]), json!(["unknown"]),
+            json!(" UDP "), json!(" TCP , UDP "), json!("tcp, udp"), json!("tcp ,udp"),
+            json!([" UDP ", " tcp "]), json!([" UDP ", "tcp"]),
+        ] {
+            let settings = json!({"method": METHOD, "password": KEY, "network": network});
+            let config: Config = serde_json::from_value(json!({"inbounds": [{
+                "protocol": "shadowsocks", "port": 8388, "settings": settings,
+            }]})).unwrap();
+            assert!(config.build().is_err(), "accepted inbound network {network}");
+            let endpoint = json!({"address": "127.0.0.1", "port": 8388, "method": METHOD, "password": KEY});
+            for nested in [false, true] {
+                let mut settings = if nested { json!({"servers": [endpoint]}) } else { endpoint.clone() };
+                settings["network"] = network.clone();
+                assert!(build_2022_outbound("ss", Some(&settings), None, None).is_err(), "accepted outbound network {network}");
+            }
+            let mut endpoint = endpoint;
+            endpoint["network"] = network.clone();
+            assert!(build_2022_outbound("ss", Some(&json!({"servers": [endpoint]})), None, None).is_err(), "accepted endpoint network {network}");
+        }
+    }
+
+    #[test]
     fn ss2022_runtime_rejects_unsupported_combinations() {
         let inbound = json!({"method": METHOD, "password": KEY});
         assert!(build_2022_inbound("ss", Some(&inbound), None).unwrap().is_some());
         for extra in [
-            json!({"network": "udp"}), json!({"network": "tcp,udp"}),
+            json!({"network": "unix"}), json!({"network": ["tcp", "unknown"]}),
             json!({"users": [{"password": "short"}]}),
             json!({"users": [null]}), json!({"clients": {}}),
             json!({"users": [{"password": KEY, "email": 7}]}),
@@ -270,7 +449,7 @@ mod ss2022_tests {
         let outbound = json!({"address": "127.0.0.1", "port": 8388, "method": METHOD, "password": KEY});
         assert!(build_2022_outbound("ss", Some(&outbound), None, None).unwrap().is_some());
         for extra in [
-            json!({"uot": true}), json!({"network": "udp"}),
+            json!({"uot": true}), json!({"network": "unix"}),
             json!({"password": format!("{KEY}:invalid")}), json!({"password": "invalid"}),
             json!({"method": "2022-blake3-chacha20-poly1305"}),
             json!({"clients": [{"password": KEY}]}),
