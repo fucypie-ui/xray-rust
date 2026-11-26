@@ -105,8 +105,12 @@ async fn standalone_close_wakes_pending_read_and_natural_worker_exit_closes_conn
     let mut bytes = [0; 16];
     let mut read = Box::pin(conn.read_from(&mut bytes));
     assert!(futures::poll!(read.as_mut()).is_pending());
+    let mut waiting_bytes = [0; 16];
+    let mut waiting_read = Box::pin(conn.read_from(&mut waiting_bytes));
+    assert!(futures::poll!(waiting_read.as_mut()).is_pending());
     conn.close().await;
     assert!(matches!(timeout(Duration::from_secs(5), read).await.unwrap(), Err(Error::Closed)));
+    assert!(matches!(timeout(Duration::from_secs(5), waiting_read).await.unwrap(), Err(Error::Closed)));
 
     let (downlink_reader, downlink_writer) = new_pipe(PipeOption::new());
     let (_uplink_reader, uplink_writer) = new_pipe(PipeOption::new());

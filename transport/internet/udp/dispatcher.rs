@@ -177,10 +177,13 @@ pub struct DispatcherConn {
 
 impl DispatcherConn {
     pub async fn read_from(&self, buf: &mut [u8]) -> Result<(usize, Destination)> {
+        let mut cache = self.cache_rx.lock().await;
         let pkt = tokio::select! {
             biased;
-            _ = self.cancellation.cancelled() => return Err(Error::Closed),
-            packet = async { self.cache_rx.lock().await.recv().await } => packet.ok_or(Error::Closed)?,
+            // Like Go's ReadFrom, drain queued packets even after closure.
+            packet = cache.recv() => packet.ok_or(Error::Closed)?,
+            // Recheck the cache if cancellation races a response becoming ready.
+            _ = self.cancellation.cancelled() => cache.try_recv().map_err(|_| Error::Closed)?,
         };
         let bytes = pkt.payload.as_slice();
         let n = bytes.len().min(buf.len());
