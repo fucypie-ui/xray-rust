@@ -6,7 +6,7 @@ on:
         description: Exact fixed Rust source with retained-future regressions
         required: true
       baseline_ref:
-        description: Exact baseline native socket runtime
+        description: Exact baseline classic and SS2022 native socket runtime
         required: true
         default: 1f3ccf7a9dce9c74be49c6653e8c1dbfbfe81e73
 permissions:
@@ -49,11 +49,11 @@ jobs:
           baseline=os.environ['BASELINE_REF']
           assert len(source)==40 and len(baseline)==40
           output=Path('ss2022-close-evidence');output.mkdir()
-          runtime=Path('proxy/shadowsocks_2022/native.rs')
-          frozen=runtime.read_bytes()
-          baseline_bytes=subprocess.check_output(['git','show',baseline+':'+str(runtime)])
+          runtimes=[Path('proxy/shadowsocks_2022/native.rs'),Path('proxy/shadowsocks/native.rs')]
+          frozen={str(path):path.read_bytes() for path in runtimes}
+          baseline_bytes={str(path):subprocess.check_output(['git','show',baseline+':'+str(path)]) for path in runtimes}
           prefix='proxy::shadowsocks_2022::relay_native_test'
-          selected=[prefix+'::ss2022_relay_native_close_revokes_pending_accept_sockets',prefix+'::ss2022_native_close_revokes_pending_accept_sockets']
+          selected=[('relay',prefix+'::ss2022_relay_native_close_revokes_pending_accept_sockets'),('endpoint',prefix+'::ss2022_native_close_revokes_pending_accept_sockets'),('classic','proxy::shadowsocks::runtime_test::classic_native_close_revokes_pending_accept_sockets')]
           def invoke(name,label,minimum=1):
               log=output/(label+'.log')
               with log.open('w') as stream:
@@ -64,8 +64,8 @@ jobs:
               return row,text
           red=[]
           try:
-              runtime.write_bytes(baseline_bytes)
-              for role,name in zip(['relay','endpoint'],selected):
+              for path in runtimes:path.write_bytes(baseline_bytes[str(path)])
+              for role,name in selected:
                   for index in range(5):
                       row,text=invoke(name,f'baseline-{role}-{index+1:03d}')
                       row['expected_failure']=row['returncode']!=0 and '0 passed; 1 failed; 0 ignored;' in text and 'pending accept retained' in text and 'AddrInUse' in text and name in text
@@ -73,10 +73,10 @@ jobs:
                       print('baseline: '+json.dumps(row),flush=True)
                       if not row['expected_failure']:print('\n'.join(text.splitlines()[-60:]),flush=True)
           finally:
-              runtime.write_bytes(frozen)
-          subprocess.run(['git','diff','--exit-code','--',str(runtime)],check=True)
+              for path in runtimes:path.write_bytes(frozen[str(path)])
+          subprocess.run(['git','diff','--exit-code','--',*[str(path) for path in runtimes]],check=True)
           results=[]
-          for role,name in zip(['relay','endpoint'],selected):
+          for role,name in selected:
               for index in range(10):
                   row,text=invoke(name,f'fixed-{role}-{index+1:03d}')
                   results.append(row);print('fixed: '+json.dumps(row),flush=True)
@@ -84,7 +84,7 @@ jobs:
           row,text=invoke(prefix,'fixed-full-relay-module',10)
           results.append(row);print('full module: '+json.dumps(row),flush=True)
           if not row['passed']:print('\n'.join(text.splitlines()[-60:]),flush=True)
-          summary={'source':source,'baseline_runtime_ref':baseline,'runtime_path':str(runtime),'fixed_runtime_sha256':hashlib.sha256(frozen).hexdigest(),'baseline_runtime_sha256':hashlib.sha256(baseline_bytes).hexdigest(),'regression_source':source,'baseline_regressions':red,'executions':len(results),'passed':sum(row['passed'] for row in results),'results':results}
+          summary={'source':source,'baseline_runtime_ref':baseline,'runtime_paths':[str(path) for path in runtimes],'fixed_runtime_sha256':{path:hashlib.sha256(content).hexdigest() for path,content in frozen.items()},'baseline_runtime_sha256':{path:hashlib.sha256(content).hexdigest() for path,content in baseline_bytes.items()},'regression_source':source,'baseline_regressions':red,'executions':len(results),'passed':sum(row['passed'] for row in results),'results':results}
           (output/'result.json').write_text(json.dumps(summary,indent=2)+'\n')
           print(json.dumps(summary),flush=True)
           sys.exit(0 if all(row['expected_failure'] for row in red) and all(row['passed'] for row in results) else 1)
