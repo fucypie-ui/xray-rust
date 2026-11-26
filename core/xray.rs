@@ -257,7 +257,9 @@ impl Instance {
             tasks.push(task);
         }
         #[cfg(debug_assertions)]
-        if let Some(task) = crate::debug_panel::start_debug_server() {
+        if let Some(task) = crate::debug_panel::start_debug_server_for_instance(
+            self.cancellation_token()?,
+        ).await {
             self.own_tasks(std::slice::from_ref(&task))?;
             tasks.push(task);
         }

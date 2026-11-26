@@ -11,7 +11,10 @@ pub mod resources;
 pub mod server;
 
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::task::{Context, Poll};
+use tokio_util::sync::CancellationToken;
 
 pub use capture::{CaptureStatus, CapturedPacket, Direction, FlowRecord, PacketCaptureStore, SizeBuckets};
 pub use metrics::{
@@ -30,7 +33,33 @@ pub const DEFAULT_DEBUG_ADDR: &str = "127.0.0.1:19876";
 static METRICS: OnceLock<DebugMetricsStore> = OnceLock::new();
 static RESOURCES: OnceLock<ResourceMonitor> = OnceLock::new();
 static CAPTURE: OnceLock<PacketCaptureStore> = OnceLock::new();
-static SERVER_OWNER: Mutex<Weak<()>> = Mutex::new(Weak::new());
+static SERVER_OWNER: Mutex<Weak<ServerOwner>> = Mutex::new(Weak::new());
+
+struct ServerOwner {
+    cancellation: CancellationToken,
+    stopped: CancellationToken,
+}
+
+impl Drop for ServerOwner {
+    fn drop(&mut self) {
+        self.stopped.cancel();
+    }
+}
+
+struct ReservedServer<F> {
+    // Fields drop in declaration order, including when aborted before first poll.
+    // Release the listener before notifying a replacement that it can bind.
+    server: Pin<Box<F>>,
+    _owner: Arc<ServerOwner>,
+}
+
+impl<F: Future<Output = ()>> Future for ReservedServer<F> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        self.get_mut().server.as_mut().poll(cx)
+    }
+}
 
 pub fn metrics() -> &'static DebugMetricsStore {
     METRICS.get_or_init(DebugMetricsStore::new)
@@ -55,29 +84,75 @@ pub fn should_bypass_direct(host: &str) -> bool {
 
 /// Start the debug HTTP + AI API server if no previous server is still running.
 /// Bind address can be overridden via `XRAY_DEBUG_ADDR` env var (default `127.0.0.1:19876`).
+/// Instances should use `start_debug_server_for_instance` to wait for a closing owner.
 pub fn start_debug_server() -> Option<tokio::task::JoinHandle<()>> {
     let addr = std::env::var("XRAY_DEBUG_ADDR").unwrap_or_else(|_| DEFAULT_DEBUG_ADDR.to_string());
     spawn_reserved_server(&SERVER_OWNER, server::run_server(addr))
 }
 
+/// Start an instance's server, waiting for a closing instance's listener to drop.
+/// Pass a token cancelled synchronously by instance close before task abortion.
+/// A live concurrent instance keeps its server and this returns `None`.
+pub async fn start_debug_server_for_instance(
+    cancellation: CancellationToken,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let addr = std::env::var("XRAY_DEBUG_ADDR").unwrap_or_else(|_| DEFAULT_DEBUG_ADDR.to_string());
+    spawn_reserved_server_when_closed(&SERVER_OWNER, cancellation, server::run_server(addr)).await
+}
+
 fn spawn_reserved_server(
-    reservation: &Mutex<Weak<()>>,
+    reservation: &Mutex<Weak<ServerOwner>>,
     server: impl Future<Output = ()> + Send + 'static,
 ) -> Option<tokio::task::JoinHandle<()>> {
-    let owner = Arc::new(());
-    {
-        let mut current = reservation.lock().unwrap_or_else(|e| e.into_inner());
-        if current.upgrade().is_some() {
+    let owner = reserve_server(reservation, CancellationToken::new()).ok()?;
+    Some(tokio::spawn(ReservedServer {
+        server: Box::pin(server),
+        _owner: owner,
+    }))
+}
+
+async fn spawn_reserved_server_when_closed(
+    reservation: &Mutex<Weak<ServerOwner>>,
+    cancellation: CancellationToken,
+    server: impl Future<Output = ()> + Send + 'static,
+) -> Option<tokio::task::JoinHandle<()>> {
+    loop {
+        if cancellation.is_cancelled() {
             return None;
         }
-        *current = Arc::downgrade(&owner);
+        let stopped = match reserve_server(reservation, cancellation.clone()) {
+            Ok(owner) => {
+                return Some(tokio::spawn(ReservedServer {
+                    server: Box::pin(server),
+                    _owner: owner,
+                }));
+            }
+            Err(owner) => {
+                if !owner.cancellation.is_cancelled() {
+                    return None;
+                }
+                owner.stopped.clone()
+            }
+        };
+        // Keep only the signal: retaining the owner's Arc would prevent Drop.
+        tokio::select! {
+            _ = stopped.cancelled() => {}
+            _ = cancellation.cancelled() => return None,
+        }
     }
-    Some(tokio::spawn(async move {
-        // Capture ownership before spawning: even an unpolled abort releases it.
-        // An expired weak token needs no cleanup that could clear a newer owner.
-        let _owner = owner;
-        server.await;
-    }))
+}
+
+fn reserve_server(
+    reservation: &Mutex<Weak<ServerOwner>>,
+    cancellation: CancellationToken,
+) -> Result<Arc<ServerOwner>, Arc<ServerOwner>> {
+    let mut current = reservation.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(owner) = current.upgrade() {
+        return Err(owner);
+    }
+    let owner = Arc::new(ServerOwner { cancellation, stopped: CancellationToken::new() });
+    *current = Arc::downgrade(&owner);
+    Ok(owner)
 }
 
 #[cfg(test)]
