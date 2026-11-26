@@ -1,8 +1,0 @@
-The files engine.rs, engine/tests.rs, wire.rs and wire/tests.rs are adapted
-from aimalygin/xray-rust, commit bedc00345ab47eb36abbc78d51d168ccf216f504 (MPL-2.0):
-https://github.com/aimalygin/xray-rust/tree/bedc00345ab47eb36abbc78d51d168ccf216f504/crates/xray-transport/src/kcp
-
-These files and their modifications are distributed under MPL-2.0.
-See LICENSE-MPL-2.0 in this directory. Other files retain their existing
-project license. Original mKCP behavior is specified by XTLS/Xray-core
-commit 67756b3674d56b72c7a7e675e8dcd3f883e1b2f7.

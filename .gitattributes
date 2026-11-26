@@ -1,2 +1,0 @@
-# Native protobuf fixtures are binary even when a short message contains no NUL.
-*.pb binary

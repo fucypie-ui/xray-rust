@@ -1,1 +1,0 @@
-pub const COMMAND_SWITCH_ACCOUNT: u8 = 1;

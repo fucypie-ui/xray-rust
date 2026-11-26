@@ -1,101 +1,99 @@
-name: Rust CI
-
+name: Native SS2022 close probe
 on:
-  push:
-  pull_request:
   workflow_dispatch:
-
+    inputs:
+      source_ref:
+        description: Exact fixed Rust source with retained-future regressions
+        required: true
+      baseline_ref:
+        description: Exact baseline native socket runtime
+        required: true
+        default: 1f3ccf7a9dce9c74be49c6653e8c1dbfbfe81e73
 permissions:
   contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
-env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: "0"
-  RUST_BACKTRACE: "1"
-
 jobs:
-  native:
-    name: Check, build, and test (Linux)
+  probe:
+    name: Revocable native socket regression (Linux)
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    defaults:
-      run:
-        shell: bash
+    timeout-minutes: 35
     steps:
-      - name: Check out source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Check out exact regression source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 0
           persist-credentials: false
-
       - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
         with:
           toolchain: stable
-
       - name: Cache Cargo dependencies
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
-          # Keep compiled dependencies useful while the port still has compile errors.
+          key: native-close-probe
           cache-on-failure: true
-
-      - name: Report toolchain
-        run: |
-          rustc --version --verbose
-          cargo --version --verbose
-
-      - name: Check all targets with locked dependencies
-        timeout-minutes: 20
-        run: cargo check --locked --all-targets
-
-      - name: Build the library and binaries
-        timeout-minutes: 20
-        run: cargo build --locked --lib --bins
-
-      # Scenario tests are modules in the library, so --all-targets includes them.
-      # Serial execution reduces interference from global state, files, and sockets.
-      - name: Run unit and scenario tests
+      - name: Prove old runtime failure and fixed socket release
         timeout-minutes: 30
-        run: cargo test --locked --all-targets --no-fail-fast -- --test-threads=1
-
-      - name: Require native SS2022 relay regression coverage
-        timeout-minutes: 5
-        run: python3 .github/scripts/run-required-rust-tests.py proxy::shadowsocks_2022::relay_native_test 8
-
-      - name: Compare built key commands with pinned Go vectors
-        timeout-minutes: 5
-        run: python3 .github/scripts/check-key-cli-parity.py target/debug/xray testing/crypto-reference/vectors.json
-
-      # Cargo's --all-targets does not include documentation tests.
-      - name: Run documentation tests
-        timeout-minutes: 10
-        run: cargo test --locked --doc --no-fail-fast -- --test-threads=1
-
-  release:
-    name: Release build (Linux)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - name: Check out source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        env:
+          EXPECTED_SOURCE: ${{ inputs.source_ref }}
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+          CARGO_TERM_COLOR: never
+          CARGO_INCREMENTAL: "0"
+          RUST_BACKTRACE: "1"
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os,sys,subprocess,json,hashlib
+          source=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          assert source==os.environ['EXPECTED_SOURCE'],source
+          baseline=os.environ['BASELINE_REF']
+          assert len(source)==40 and len(baseline)==40
+          output=Path('ss2022-close-evidence');output.mkdir()
+          runtime=Path('proxy/shadowsocks_2022/native.rs')
+          frozen=runtime.read_bytes()
+          baseline_bytes=subprocess.check_output(['git','show',baseline+':'+str(runtime)])
+          prefix='proxy::shadowsocks_2022::relay_native_test'
+          selected=[prefix+'::ss2022_relay_native_close_revokes_pending_accept_sockets',prefix+'::ss2022_native_close_revokes_pending_accept_sockets']
+          def invoke(name,label,minimum=1):
+              log=output/(label+'.log')
+              with log.open('w') as stream:
+                  result=subprocess.run([sys.executable,'.github/scripts/run-required-rust-tests.py',name,str(minimum)],stdout=stream,stderr=subprocess.STDOUT)
+              text=log.read_text()
+              passed=result.returncode==0 and f'Required gate passed: {name} ({minimum} executed tests)' in text
+              row={'label':label,'filter':name,'returncode':result.returncode,'passed':passed}
+              return row,text
+          red=[]
+          try:
+              runtime.write_bytes(baseline_bytes)
+              for role,name in zip(['relay','endpoint'],selected):
+                  for index in range(5):
+                      row,text=invoke(name,f'baseline-{role}-{index+1:03d}')
+                      row['expected_failure']=row['returncode']!=0 and '0 passed; 1 failed; 0 ignored;' in text and 'pending accept retained' in text and 'AddrInUse' in text and name in text
+                      red.append(row)
+                      print('baseline: '+json.dumps(row),flush=True)
+                      if not row['expected_failure']:print('\n'.join(text.splitlines()[-60:]),flush=True)
+          finally:
+              runtime.write_bytes(frozen)
+          subprocess.run(['git','diff','--exit-code','--',str(runtime)],check=True)
+          results=[]
+          for role,name in zip(['relay','endpoint'],selected):
+              for index in range(10):
+                  row,text=invoke(name,f'fixed-{role}-{index+1:03d}')
+                  results.append(row);print('fixed: '+json.dumps(row),flush=True)
+                  if not row['passed']:print('\n'.join(text.splitlines()[-60:]),flush=True)
+          row,text=invoke(prefix,'fixed-full-relay-module',10)
+          results.append(row);print('full module: '+json.dumps(row),flush=True)
+          if not row['passed']:print('\n'.join(text.splitlines()[-60:]),flush=True)
+          summary={'source':source,'baseline_runtime_ref':baseline,'runtime_path':str(runtime),'fixed_runtime_sha256':hashlib.sha256(frozen).hexdigest(),'baseline_runtime_sha256':hashlib.sha256(baseline_bytes).hexdigest(),'regression_source':source,'baseline_regressions':red,'executions':len(results),'passed':sum(row['passed'] for row in results),'results':results}
+          (output/'result.json').write_text(json.dumps(summary,indent=2)+'\n')
+          print(json.dumps(summary),flush=True)
+          sys.exit(0 if all(row['expected_failure'] for row in red) and all(row['passed'] for row in results) else 1)
+          PY
+      - name: Save individual red and green invocations
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          persist-credentials: false
-
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
-        with:
-          toolchain: stable
-
-      - name: Cache Cargo dependencies
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-        with:
-          key: release
-          cache-on-failure: true
-
-      # Release excludes cfg(debug_assertions) modules and enables LTO in Cargo.toml.
-      - name: Build release library and binaries with locked dependencies
-        timeout-minutes: 50
-        run: cargo build --locked --release --lib --bins
+          name: ss2022-close-evidence
+          path: ss2022-close-evidence/
+          if-no-files-found: error
+          retention-days: 14

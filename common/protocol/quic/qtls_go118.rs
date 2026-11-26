@@ -1,1 +1,0 @@
-pub const QUIC_VERSION_1: u32 = 0x00000001;
