@@ -5,6 +5,7 @@ use crate::common::{errors::{Error, Result}, net::{BoxStream, Destination, Netwo
 use crate::features::outbound::OutboundHandler;
 use crate::proxy::vmess::encoding::{BodySecurity, RequestHeader, VmessDatagram, VmessStream, OPTION_CHUNK_STREAM, OPTION_CHUNK_MASKING, OPTION_GLOBAL_PADDING};
 use crate::transport::internet::{TcpDialer, TlsClient};
+use crate::transport::internet::dialer::Dialer;
 
 pub struct Client {
     tag: String,
@@ -12,20 +13,24 @@ pub struct Client {
     user_id: Uuid,
     tls_client: Option<Arc<TlsClient>>,
     tls_sni: Option<String>,
+    dialer: Option<Arc<dyn Dialer>>,
     security: BodySecurity,
     options: u8,
     termination_signal: bool,
 }
 impl Client {
     pub fn new(tag: impl Into<String>, server_addr: Destination, user_id: Uuid, tls_client: Option<TlsClient>, tls_sni: Option<String>) -> Self {
-        Self {tag:tag.into(),server_addr,user_id,tls_client:tls_client.map(Arc::new),tls_sni,
+        Self {tag:tag.into(),server_addr,user_id,tls_client:tls_client.map(Arc::new),tls_sni,dialer:None,
             security:BodySecurity::auto(),options:OPTION_CHUNK_STREAM|OPTION_CHUNK_MASKING|OPTION_GLOBAL_PADDING,termination_signal:true}
     }
     pub fn with_security(mut self, security: &str) -> Result<Self> {self.security=BodySecurity::from_name(security)?;Ok(self)}
     pub fn with_options(mut self, options: u8) -> Self {self.options=options;self}
     pub fn with_termination_signal(mut self, enabled: bool) -> Self {self.termination_signal=enabled;self}
+    pub fn with_dialer(mut self, dialer: Arc<dyn Dialer>) -> Self {self.dialer=Some(dialer);self}
     async fn dial_transport(&self) -> Result<BoxStream> {
-        let tcp = TcpDialer::dial(&self.server_addr).await?;
+        let tcp = if let Some(dialer) = &self.dialer {
+            dialer.dial(&self.server_addr).await?
+        } else { TcpDialer::dial(&self.server_addr).await? };
         if let Some(tls) = &self.tls_client {
             let sni = self.tls_sni.as_deref().unwrap_or_else(|| match &self.server_addr.address {
                 crate::common::net::Address::Domain(domain) => domain.as_str(), _ => "localhost",

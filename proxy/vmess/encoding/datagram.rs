@@ -97,7 +97,7 @@ impl DatagramTransport for VmessDatagram {
         self.closed.send_replace(true);
         // Active recv/send operations observe the watch and release both locks.
         let writer = self.writer.lock().await.take();
-        self.reader.lock().await.take();
+        drop(self.reader.lock().await.take());
         if let Some(mut writer) = writer {
             let result = tokio::time::timeout(Duration::from_secs(1), writer.shutdown()).await
                 .map_err(|_| Error::Timeout)?;

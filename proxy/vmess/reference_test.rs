@@ -3,6 +3,7 @@ use super::{aead::{AuthIdGenerator, authid::crc32_ieee, kdf::kdf}, encoding::{Bo
 use crate::common::{net::{Address, BoxStream, Destination}, protocol::{RequestCommand, SessionContext, User}};
 use crate::features::{inbound::InboundHandler, outbound::OutboundHandler};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::{io, pin::Pin, sync::{Arc, Mutex}, task::{Context, Poll}, time::Duration};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use uuid::Uuid;
@@ -21,9 +22,18 @@ struct BodyVector {security: u8, options: u8, command: u8, payload: String, requ
 fn vectors() -> Vectors {
     // include_str is intentional: missing fixtures are a compile error, never a
     // successful zero-test run or an ignored/optional cross-language check.
-    let data: Vectors=serde_json::from_str(include_str!("testdata/go-vectors.json")).expect("required pinned-Go VMess fixtures");
+    let json = include_str!("testdata/go-vectors.json");
+    assert_eq!(hex::encode(Sha256::digest(json.as_bytes())), "25315d8abb22636487b7fea89971b78d1ffe824e8c2abab7daaeca48e92e6f4c", "verified independent fixture changed");
+    let data: Vectors=serde_json::from_str(json).expect("required pinned-Go VMess fixtures");
     assert_eq!(data.commit,"67756b3674d56b72c7a7e675e8dcd3f883e1b2f7");
     assert_eq!(data.bodies.len(),24,"fixture coverage changed");
+    for security in [3,4] {
+        for options in [1,5,13,17,21,29] {
+            for command in [1,2] {
+                assert_eq!(data.bodies.iter().filter(|body| body.security==security && body.options==options && body.command==command).count(),1,"missing or duplicated fixture combination");
+            }
+        }
+    }
     assert_eq!(data.shake_masks.len(),12);
     data
 }
@@ -82,6 +92,50 @@ async fn pinned_go_all_body_security_options_and_directions() {
             assert!(decoder.read_frame(&mut reader).await.unwrap().is_empty());
         }
     }
+}
+
+#[tokio::test]
+async fn pinned_go_runtime_reads_every_cipher_option_and_packet_combination() {
+    let data = vectors();
+    for case in &data.bodies {
+        let mut request = request(&data);
+        request.security = BodySecurity::from_byte(case.security).unwrap();
+        request.options = case.options;
+        request.command = RequestCommand::from_u8(case.command).unwrap();
+        let mut response = bytes(&data.response_wire);
+        response.extend(bytes(&case.response_wire));
+        let (inner, _) = memory(response, 1);
+        let mut client = VmessStream::client(inner, request.clone()).unwrap();
+        let mut plain = Vec::new(); client.read_to_end(&mut plain).await.unwrap();
+        assert_eq!(plain, bytes(&case.payload), "runtime Go response: {} / {} / {}", case.security, case.options, case.command);
+        let (inner, _) = memory(bytes(&case.request_wire), 1);
+        let mut server = VmessStream::server(inner, request).unwrap();
+        plain.clear(); server.read_to_end(&mut plain).await.unwrap();
+        assert_eq!(plain, bytes(&case.payload), "runtime Go request: {} / {} / {}", case.security, case.options, case.command);
+    }
+}
+
+#[test]
+fn replay_registration_is_atomic_across_parallel_connections() {
+    let data = vectors();
+    let validator = Arc::new(validator(data.user_id));
+    let barrier = Arc::new(std::sync::Barrier::new(16));
+    let id = fixed::<16>(&data.auth_id);
+    let now = data.timestamp;
+    let threads = (0..16).map(|_| {
+        let validator = validator.clone(); let barrier = barrier.clone();
+        std::thread::spawn(move || { barrier.wait(); validator.authenticate(&id, now).is_ok() })
+    }).collect::<Vec<_>>();
+    assert_eq!(threads.into_iter().map(|thread| usize::from(thread.join().unwrap())).sum::<usize>(), 1);
+    let barrier = Arc::new(std::sync::Barrier::new(16));
+    let request = request(&data);
+    let threads = (0..16).map(|_| {
+        let validator = validator.clone(); let barrier = barrier.clone(); let request = request.clone();
+        std::thread::spawn(move || { barrier.wait(); validator.register_session(&request, now).is_ok() })
+    }).collect::<Vec<_>>();
+    assert_eq!(threads.into_iter().map(|thread| usize::from(thread.join().unwrap())).sum::<usize>(), 1);
+    assert!(validator.register_session(&request, now + 179).is_err());
+    assert!(validator.register_session(&request, now + 180).is_ok());
 }
 
 #[tokio::test]
