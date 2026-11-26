@@ -67,6 +67,10 @@ jobs:
             bash testing/reality-reference/build-peer.sh \
               "$GITHUB_WORKSPACE/go-reference" "$output_directory" \
               2>&1 | tee "$output_directory/build-peer.log"
+          elif [[ $REFERENCE_ENGINE == hysteria ]]; then
+            bash testing/hysteria-reference/build-peer.sh \
+              "$GITHUB_WORKSPACE/go-reference" "$output_directory/hysteria-go-peer" \
+              2>&1 | tee "$output_directory/build-peer.log"
           fi
           git -C go-reference diff --exit-code
           [[ -z $(git -C go-reference status --porcelain) ]]

@@ -1,0 +1,132 @@
+name: Protocol interoperability
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  peer:
+    name: Live pinned Go peer (${{ matrix.engine }}, Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - engine: reality
+            filter: transport::internet::reality::go_peer_test
+            minimum: 3
+            mode: --ignored
+          - engine: wireguard
+            filter: proxy::wireguard::device::tests::live_go_
+            minimum: 8
+            mode: --include-ignored
+          - engine: hysteria
+            filter: hysteria_go_peer
+            minimum: 2
+            mode: --ignored
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out Rust and test sources
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Check out authoritative Go source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: XTLS/Xray-core
+          ref: 67756b3674d56b72c7a7e675e8dcd3f883e1b2f7
+          path: go-reference
+          persist-credentials: false
+
+      - name: Install reference Go toolchain
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go-reference/go.mod
+          cache-dependency-path: go-reference/go.sum
+
+      - name: Build independent Go peer
+        env:
+          ENGINE: ${{ matrix.engine }}
+          GOTOOLCHAIN: auto
+        run: |
+          set -euo pipefail
+          [[ $(git -C go-reference rev-parse HEAD) == 67756b3674d56b72c7a7e675e8dcd3f883e1b2f7 ]]
+          output_directory="$GITHUB_WORKSPACE/go-peer"
+          case "$ENGINE" in
+            reality)
+              bash testing/reality-reference/build-peer.sh "$GITHUB_WORKSPACE/go-reference" "$output_directory"
+              test -x "$output_directory/go-reality-peer"
+              printf 'XRAY_GO_REALITY_PEER_BIN=%s/go-reality-peer\n' "$output_directory" >> "$GITHUB_ENV"
+              ;;
+            wireguard)
+              bash testing/wireguard-reference/generate.sh "$GITHUB_WORKSPACE/go-reference" "$output_directory"
+              test -x "$output_directory/wireguard-reference"
+              printf 'XRAY_WIREGUARD_REFERENCE=%s/wireguard-reference\n' "$output_directory" >> "$GITHUB_ENV"
+              ;;
+            hysteria)
+              bash testing/hysteria-reference/build-peer.sh "$GITHUB_WORKSPACE/go-reference" "$output_directory/hysteria-go-peer"
+              test -x "$output_directory/hysteria-go-peer"
+              printf 'XRAY_HYSTERIA_GO_PEER=%s/hysteria-go-peer\n' "$output_directory" >> "$GITHUB_ENV"
+              ;;
+            *) exit 2 ;;
+          esac
+          git -C go-reference diff --exit-code
+          [[ -z $(git -C go-reference status --porcelain) ]]
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: protocol-peers
+          cache-on-failure: true
+
+      - name: Require live interoperability tests
+        timeout-minutes: 35
+        env:
+          TEST_FILTER: ${{ matrix.filter }}
+          MINIMUM_TESTS: ${{ matrix.minimum }}
+          TEST_MODE: ${{ matrix.mode }}
+        run: python3 .github/scripts/run-required-rust-tests.py "$TEST_FILTER" "$MINIMUM_TESTS" "$TEST_MODE"
+
+  clippy:
+    name: Clippy all targets (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install stable Rust with Clippy
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: clippy
+          cache-on-failure: true
+      - name: Check all target lints
+        run: cargo clippy --locked --all-targets -- -D warnings
