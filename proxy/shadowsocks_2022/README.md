@@ -93,7 +93,9 @@ new shared native listener/dispatcher contract is connected and tested**:
 ## Remaining runtime work and explicit differences
 
 - Native UDP bind/dispatch and the BoxDatagram outbound adapter are pending.
-  An omitted network currently means TCP here, whereas Go defaults to TCP+UDP.
+  Omitted/null JSON network means TCP in pinned Go via NetworkList.Build(nil).
+  An empty native network list instead defaults to TCP+UDP in the Go SS2022
+  constructors; both entry paths need their own acceptance tests.
 - UDP-over-TCP and mux are not SS2022 cipher codecs in the pinned Go package.
   Its outbound JSON has no consumed uot setting. Generic mux, packet adaptation
   and stream wrappers belong to the shared runtime and need integration tests.

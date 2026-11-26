@@ -9,7 +9,7 @@ Checked crates.io published manifests and the official tagged GitHub source befo
 
 ## Authoritative Go target
 
-Adjacent read-only Xray-core commit 67756b3674d56b72c7a7e675e8dcd3f883e1b2f7. TCP and UDP support AES128, AES256 and ChaCha20. Multi-user, EIH chains and relays are AES-only. Go inbound defaults to both TCP and UDP. Go infra/conf/shadowsocks.go selects normal, multi-user or relay mode from users, using users[0].address to distinguish multi-user and relay. EIH TCP derives identity keys with "shadowsocks 2022 identity subkey" and encrypts the first 16 BLAKE3 hash bytes of the next PSK. UDP EIH uses the raw AES key and XORs the hash with the decrypted 16-byte session/packet header. The SS2022 Go package contains no UOT or mux codec: those depend on the generic runtime's packet/stream adaptation, not the SS2022 cipher.
+Adjacent read-only Xray-core commit 67756b3674d56b72c7a7e675e8dcd3f883e1b2f7. TCP and UDP support AES128, AES256 and ChaCha20. Multi-user, EIH chains and relays are AES-only. Omitted/null JSON network is TCP through infra/conf/common.go NetworkList.Build(nil). The native SS2022 constructors instead default an empty Network list to TCP+UDP. Go infra/conf/shadowsocks.go selects normal, multi-user or relay mode from users, using users[0].address to distinguish multi-user and relay. EIH TCP derives identity keys with "shadowsocks 2022 identity subkey" and encrypts the first 16 BLAKE3 hash bytes of the next PSK. UDP EIH uses the raw AES key and XORs the hash with the decrypted 16-byte session/packet header. The SS2022 Go package contains no UOT or mux codec: those depend on the generic runtime's packet/stream adaptation, not the SS2022 cipher.
 
 ## Shared runtime integration after initial compile
 
