@@ -24,7 +24,8 @@ pub(super) struct WireGuardDatagrams {
 }
 impl WireGuardDatagrams {
     pub fn new(device: WireGuardDevice) -> Self {
-        Self { device, flows: Mutex::new(HashMap::new()), changed: Notify::new(), closed: CancellationToken::new() }
+        let closed = device.child_cancellation();
+        Self { device, flows: Mutex::new(HashMap::new()), changed: Notify::new(), closed }
     }
     fn expire(&self) {
         self.flows.lock().unwrap_or_else(|error| error.into_inner()).retain(|_, flow| flow.active.elapsed() < IDLE);

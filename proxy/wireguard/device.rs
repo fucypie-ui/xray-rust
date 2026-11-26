@@ -147,6 +147,7 @@ impl WireGuardDevice {
     pub(crate) fn stop(&self) {
         self.inner.cancellation.cancel(); self.inner.stack().shutdown();
     }
+    pub(crate) fn child_cancellation(&self) -> CancellationToken { self.inner.cancellation.child_token() }
 }
 
 struct UdpSockets { v4: Option<UdpSocket>, v6: Option<UdpSocket>, primary_v6: bool }

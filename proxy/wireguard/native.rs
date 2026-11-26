@@ -32,7 +32,8 @@ impl InboundHandler for WireGuardInbound {
     async fn bind_native(&self, address: SocketAddr) -> Result<Option<Box<dyn NativeInboundListener>>> {
         let server = Arc::new(WireGuardServer::bind(&self.tag, self.config.clone(), address).await?);
         self.devices.lock().unwrap_or_else(|error| error.into_inner()).push(server.device().clone());
-        Ok(Some(Box::new(Listener { server, flows: HashMap::new(), cancellation: CancellationToken::new() })))
+        let cancellation = server.device().child_cancellation();
+        Ok(Some(Box::new(Listener { server, flows: HashMap::new(), cancellation })))
     }
 }
 
