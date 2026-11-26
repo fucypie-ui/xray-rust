@@ -33,7 +33,7 @@ impl ProbeFeature {
         let interval = if ns == 0 { Duration::from_secs(60) } else { Duration::from_nanos(ns.max(10_000_000_000) as u64) };
         let timeout = duration_ns(ping.timeout.as_deref())?;
         let timeout = if timeout <= 0 { Duration::from_secs(5) } else { Duration::from_nanos(timeout as u64) };
-        let url = if ping.destination.trim().is_empty() { "https://connectivitycheck.gstatic.com/generate_204".into() } else { ping.destination.trim().into() };
+        let url: String = if ping.destination.trim().is_empty() { "https://connectivitycheck.gstatic.com/generate_204".into() } else { ping.destination.trim().into() };
         let method: String = if ping.http_method.is_empty() { "HEAD".into() } else { ping.http_method.trim().into() };
         http::Method::from_bytes(method.as_bytes()).map_err(|error| Error::Config(format!("invalid HTTP method: {}", error)))?;
         Ok(Self { state: Arc::new(Observatory::new(url, interval, config.subject_selectors)), handlers,

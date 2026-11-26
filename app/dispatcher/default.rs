@@ -507,7 +507,7 @@ where
 {
     #[cfg(debug_assertions)]
     let mut ttfb_recorded = false;
-    let mut on_chunk = move |_chunk: &[u8]| {
+    let on_chunk = move |_chunk: &[u8]| {
         if let Some(c) = &user_counter { c.add(_chunk.len() as i64); }
         #[cfg(debug_assertions)]
         if let Some((ref meta, dir)) = tap {
@@ -544,6 +544,8 @@ where
             );
         }
     };
+    #[cfg(debug_assertions)]
+    let mut on_chunk = on_chunk;
     let mut buffer = vec![0u8; buffer_size];
     let mut total = 0u64;
     loop {
