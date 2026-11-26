@@ -234,7 +234,7 @@ fn read_segment(buf: &[u8]) -> Option<(Segment, &[u8])> {
             segment.receiving_window = u32_at(buf);
             segment.receiving_next = u32_at(&buf[4..]);
             segment.timestamp = u32_at(&buf[8..]);
-            segment.numbers = rest[..count * 4].chunks_exact(4).map(u32_at).collect();
+            segment.numbers = rest[..count * 4].as_chunks::<4>().0.iter().map(|bytes| u32_at(bytes)).collect();
             Some((Segment::Ack(segment), &rest[count * 4..]))
         }
         _ => {

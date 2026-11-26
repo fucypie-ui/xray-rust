@@ -382,14 +382,13 @@ use xray_rs_window::{read_process_cpu_100ns, read_process_memory_mb, read_thread
 
 #[cfg(not(target_os = "windows"))]
 fn read_process_cpu_100ns() -> (u64, u64) {
-    if let Ok(stat) = std::fs::read_to_string("/proc/self/stat") {
-        if let Some(end_comm) = stat.rfind(')') {
-            let fields: Vec<&str> = stat[end_comm + 1..].split_whitespace().collect();
-            if fields.len() > 13 {
-                let utime: u64 = fields[11].parse().unwrap_or(0);
-                let stime: u64 = fields[12].parse().unwrap_or(0);
-                return (stime * 100_000, utime * 100_000);
-            }
+    if let Ok(stat) = std::fs::read_to_string("/proc/self/stat")
+        && let Some(end_comm) = stat.rfind(')') {
+        let fields: Vec<&str> = stat[end_comm + 1..].split_whitespace().collect();
+        if fields.len() > 13 {
+            let utime: u64 = fields[11].parse().unwrap_or(0);
+            let stime: u64 = fields[12].parse().unwrap_or(0);
+            return (stime * 100_000, utime * 100_000);
         }
     }
     (0, 0)

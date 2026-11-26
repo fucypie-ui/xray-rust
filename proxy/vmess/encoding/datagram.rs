@@ -24,12 +24,12 @@ pub struct VmessDatagram {
 }
 impl VmessDatagram {
     pub fn inbound(stream: VmessStream, destination: Destination, source: Option<Destination>) -> Result<BoxDatagram> {
-        Self::new(stream, destination, source, false)
+        Self::from_stream(stream, destination, source, false)
     }
     pub fn outbound(stream: VmessStream, destination: Destination) -> Result<BoxDatagram> {
-        Self::new(stream, destination.clone(), Some(destination), true)
+        Self::from_stream(stream, destination.clone(), Some(destination), true)
     }
-    fn new(stream: VmessStream, destination: Destination, source: Option<Destination>, enforce_destination: bool) -> Result<BoxDatagram> {
+    fn from_stream(stream: VmessStream, destination: Destination, source: Option<Destination>, enforce_destination: bool) -> Result<BoxDatagram> {
         if !stream.is_packet() { return Err(Error::Protocol("VMess datagram adapter requires UDP command".into())); }
         let (reader, writer) = tokio::io::split(stream);
         let (closed, _) = watch::channel(false);
@@ -103,10 +103,9 @@ impl DatagramTransport for VmessDatagram {
         if let Some(mut writer) = writer {
             let result = tokio::time::timeout(Duration::from_secs(1), writer.shutdown()).await
                 .map_err(|_| Error::Timeout)?;
-            if let Err(error) = result {
-                if !matches!(error.kind(), std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::NotConnected | std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted) {
-                    return Err(error.into());
-                }
+            if let Err(error) = result
+                && !matches!(error.kind(), std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::NotConnected | std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted) {
+                return Err(error.into());
             }
         }
         Ok(())

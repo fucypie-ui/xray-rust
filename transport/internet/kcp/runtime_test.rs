@@ -54,7 +54,7 @@ fn deterministic_loss_reordering_duplicates_and_fragmentation() {
                 ordinal += 1;
                 if ordinal % 7 == 0 { lost += 1; continue; }
                 let delay = [30, 0, 20, 10][ordinal % 4];
-                if ordinal % 11 == 0 {
+                if ordinal.is_multiple_of(11) {
                     duplicated += 1;
                     network.push((now + delay + 10, to_server, packet.clone()));
                 }
@@ -187,13 +187,13 @@ async fn live_runtime_survives_udp_loss_reordering_and_duplicates() {
                         } else { peer = Some(from); server_address };
                         ordinal += 1;
                         // Lose the first DATA, then every ninth datagram.
-                        if ordinal == 1 || ordinal % 9 == 0 {
+                        if ordinal == 1 || ordinal.is_multiple_of(9) {
                             loss_count.fetch_add(1, Ordering::Relaxed);
                             continue;
                         }
                         let due = tokio::time::Instant::now() + Duration::from_millis([21, 0, 14, 7][ordinal % 4]);
                         queue.push((due, to, raw[..count].to_vec()));
-                        if ordinal % 11 == 0 {
+                        if ordinal.is_multiple_of(11) {
                             queue.push((due + Duration::from_millis(5), to, raw[..count].to_vec()));
                         }
                     }

@@ -32,7 +32,7 @@ impl Client {
             dialer.dial(&self.server_addr).await?
         } else { TcpDialer::dial(&self.server_addr).await? };
         if let Some(tls) = &self.tls_client {
-            let sni = self.tls_sni.as_deref().unwrap_or_else(|| match &self.server_addr.address {
+            let sni = self.tls_sni.as_deref().unwrap_or(match &self.server_addr.address {
                 crate::common::net::Address::Domain(domain) => domain.as_str(), _ => "localhost",
             });
             tls.connect(sni, tcp).await

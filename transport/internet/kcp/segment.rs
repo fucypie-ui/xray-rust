@@ -170,7 +170,7 @@ impl AckSegment {
         let rest = buf.get(13..)?;
         if rest.len() < count * 4 { return None; }
         let u32_be = |s: &[u8]| u32::from_be_bytes(s.try_into().unwrap());
-        let number_list = rest[..count * 4].chunks_exact(4).map(u32_be).collect();
+        let number_list = rest[..count * 4].as_chunks::<4>().0.iter().map(|bytes| u32_be(bytes)).collect();
         Some((Self {
             conv, option,
             receiving_window: u32_be(&buf[0..4]),

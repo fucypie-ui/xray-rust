@@ -429,7 +429,7 @@ mod tests {
     #[test]
     fn go_uuid_input_and_test_mode() {
         assert!(matches!(parse(&["xray", "uuid", "-i", "example"]).unwrap().command, Some(Commands::Uuid { input }) if input == "example"));
-        assert!(matches!(parse(&["xray", "run", "-config=custom.json", "-test"]).unwrap().command, Some(Commands::Run { config, test: true }) if config == PathBuf::from("custom.json")));
+        assert!(matches!(parse(&["xray", "run", "-config=custom.json", "-test"]).unwrap().command, Some(Commands::Run { config, test: true }) if config == std::path::Path::new("custom.json")));
         assert!(parse(&["xray", "tls", "ping"]).is_err());
         assert!(parse(&["xray", "tls", "ping", "--ip=not-an-ip", "example.com"]).is_err());
         assert!(parse(&["xray", "-test", "-c", "custom.json"]).unwrap().test);

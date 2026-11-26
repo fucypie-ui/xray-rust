@@ -99,24 +99,18 @@ async fn run(stream: BoxStream, limits: MuxLimits, mut requests: Option<mpsc::Re
     let mut drivers = JoinSet::new();
     let mut children = JoinSet::new();
     drivers.spawn(async move {
-        let result = async {
-            loop {
-                match Frame::decode(&mut reader).await {
-                    Ok(frame) => if frames.send(frame).await.is_err() { return Ok(()); },
-                    Err(Error::Eof) => return Ok(()),
-                    Err(error) => return Err(error),
-                }
+        loop {
+            match Frame::decode(&mut reader).await {
+                Ok(frame) => if frames.send(frame).await.is_err() { return Ok(()); },
+                Err(Error::Eof) => return Ok(()),
+                Err(error) => return Err(error),
             }
-        }.await;
-        result
+        }
     });
     drivers.spawn(async move {
-        let result = async {
-            while let Some(frame) = outgoing.recv().await { frame.encode(&mut writer).await?; }
-            writer.shutdown().await?;
-            Ok(())
-        }.await;
-        result
+        while let Some(frame) = outgoing.recv().await { frame.encode(&mut writer).await?; }
+        writer.shutdown().await?;
+        Ok(())
     });
     let mut sessions: HashMap<u16, Entry> = HashMap::new();
     let mut next_id = 0u16;
