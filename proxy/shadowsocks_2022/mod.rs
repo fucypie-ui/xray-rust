@@ -5,6 +5,7 @@ pub mod config;
 pub mod config_pb;
 pub mod inbound;
 pub mod inbound_multi;
+pub(crate) mod identity;
 pub mod inbound_relay;
 pub mod kdf;
 pub mod outbound;
@@ -27,3 +28,11 @@ pub use outbound::Shadowsocks2022Outbound;
 pub use protocol::{HEADER_TYPE_CLIENT, HEADER_TYPE_SERVER, SessionHeader};
 pub use server::Server;
 pub use validator::CipherValidator;
+
+pub mod multi_server;
+pub mod relay_server;
+pub mod packet;
+pub mod udp_session;
+
+#[cfg(test)]
+mod extended_test;

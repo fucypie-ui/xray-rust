@@ -76,17 +76,21 @@ fn reject_users(value: &Value) -> Result<()> {
         if let Some(items) = value.get(field).filter(|items| !items.is_null()) {
             let items = items.as_array().ok_or_else(|| Error::Config(format!("SS2022 {field} must be an array")))?;
             if !items.is_empty() {
-                return Err(Error::Unsupported("SS2022 EIH, multi-user and relay configurations are not implemented".into()));
+                return Err(Error::Unsupported("SS2022 outbound users/clients are not supported; configure an AES PSK chain in password".into()));
             }
         }
     }
+    reject_packet_options(value)
+}
+
+fn reject_packet_options(value: &Value) -> Result<()> {
     if value.get("uot").is_some_and(|uot| !uot.is_null() && uot != &Value::Bool(false)) {
         return Err(Error::Unsupported("SS2022 UDP-over-TCP is not implemented".into()));
     }
     if let Some(network) = value.get("network").filter(|network| !network.is_null())
         && !network.as_str().is_some_and(|network| network.eq_ignore_ascii_case("tcp"))
     {
-        return Err(Error::Unsupported("SS2022 supports only single-user TCP; UDP is not implemented".into()));
+        return Err(Error::Unsupported("SS2022 native UDP requires shared datagram runtime integration".into()));
     }
     Ok(())
 }
@@ -104,19 +108,88 @@ fn validate_2022_transport(stream: Option<&super::conf::StreamSettingsConfig>) -
     Ok(())
 }
 
+// Keep both aliases typed, including the unused one, as Go's JSON decoder does.
+#[derive(Deserialize)]
+struct Shadowsocks2022Users {
+    users: Option<Vec<Shadowsocks2022UserSettings>>,
+    clients: Option<Vec<Shadowsocks2022UserSettings>>,
+}
+
+#[derive(Deserialize)]
+struct Shadowsocks2022UserSettings {
+    method: Option<String>,
+    password: Option<String>,
+    level: Option<u8>,
+    email: Option<String>,
+    address: Option<String>,
+    port: Option<u16>,
+}
+
 pub(crate) fn build_2022_inbound(
     tag: &str, raw: Option<&Value>, stream: Option<&super::conf::StreamSettingsConfig>,
 ) -> Result<Option<Arc<dyn InboundHandler>>> {
     let Some(raw) = raw.filter(|raw| contains_2022(raw)) else { return Ok(None); };
-    reject_users(raw)?;
+    reject_packet_options(raw)?;
     validate_2022_transport(stream)?;
     let settings: ShadowsocksServerConfig = serde_json::from_value(raw.clone())
         .map_err(|error| Error::Config(format!("Invalid SS2022 inbound settings: {error}")))?;
     if !is_2022(&settings.method) || raw.get("servers").is_some_and(|servers| !servers.is_null()) {
         return Err(Error::Unsupported("SS2022 inbound requires one settings.method/password pair".into()));
     }
+    let level = settings.level.unwrap_or_default();
+    if level > u32::from(u8::MAX) {
+        return Err(Error::Config("SS2022 inbound level must be in 0..255".into()));
+    }
+    // Go gives clients precedence, including when it is an empty array.
+    let users: Shadowsocks2022Users = serde_json::from_value(raw.clone())
+        .map_err(|error| Error::Config(format!("Invalid SS2022 users/clients: {error}")))?;
+    if let Some(users) = users.clients.or(users.users) {
+        if !users.is_empty() {
+            use crate::proxy::shadowsocks_2022::{
+                cipher::CipherMethod,
+                kdf::parse_key,
+                multi_server::{MultiUserServer, UserAccount},
+                relay_server::{RelayServer, RelayTarget},
+            };
+            use crate::common::protocol::User;
+            let method = CipherMethod::parse(&settings.method)?;
+            if method.is_chacha() {
+                return Err(Error::Config("SS2022 multi-user and relay require AES".into()));
+            }
+            let master = parse_key(&settings.password, method.key_length())?;
+            let relay_mode = users[0].address.is_some();
+            let server = MultiUserServer::new(tag, method, master.clone())?;
+            let mut targets = Vec::new();
+            for (index, raw_user) in users.into_iter().enumerate() {
+                if !raw_user.method.as_deref().unwrap_or_default().is_empty() {
+                    return Err(Error::Config("SS2022 users must have empty method".into()));
+                }
+                let key = parse_key(raw_user.password.as_deref().unwrap_or_default(), method.key_length())?;
+                let prefix = if relay_mode { "unnamed-destination" } else { "unnamed-user" };
+                let email = raw_user.email.filter(|email| !email.is_empty())
+                    .unwrap_or_else(|| format!("{prefix}-{index}-{}", uuid::Uuid::new_v4()));
+                let user = User::with_email(uuid::Uuid::new_v4(), email, u32::from(raw_user.level.unwrap_or_default()));
+                if relay_mode {
+                    let address = raw_user.address.filter(|address| !address.is_empty())
+                        .ok_or_else(|| Error::Config("all SS2022 relay users need an address".into()))?;
+                    let port = raw_user.port.filter(|port| *port != 0)
+                        .ok_or_else(|| Error::Config("SS2022 relay port must be nonzero".into()))?;
+                    targets.push(RelayTarget { key, destination: Destination::tcp(address.parse::<Address>()?, port), user });
+                } else {
+                    server.add_account(UserAccount { key, user })?;
+                }
+            }
+            if relay_mode {
+                return Ok(Some(Arc::new(RelayServer::new(tag, method, master, targets)?)));
+            }
+            return Ok(Some(Arc::new(server)));
+        }
+    }
+    let user = crate::common::protocol::User::with_email(
+        uuid::Uuid::nil(), settings.email.unwrap_or_default(), level,
+    );
     let config = Shadowsocks2022Config { method: settings.method, key: settings.password, network: settings.network };
-    Ok(Some(Arc::new(Server::try_new(tag, config)?)))
+    Ok(Some(Arc::new(Server::try_new(tag, config)?.with_user(user))))
 }
 
 pub(crate) fn build_2022_outbound(
@@ -174,9 +247,16 @@ mod ss2022_tests {
         assert!(build_2022_inbound("ss", Some(&inbound), None).unwrap().is_some());
         for extra in [
             json!({"network": "udp"}), json!({"network": "tcp,udp"}),
-            json!({"users": [{"password": KEY}]}),
-            json!({"clients": [{"password": KEY}]}),
-            json!({"users": [{"password": KEY, "address": "127.0.0.1", "port": 80}]}),
+            json!({"users": [{"password": "short"}]}),
+            json!({"users": [null]}), json!({"clients": {}}),
+            json!({"users": [{"password": KEY, "email": 7}]}),
+            json!({"users": [{"password": KEY, "level": 256}]}),
+            json!({"users": [{"password": KEY, "method": false}]}),
+            json!({"users": [{"password": KEY, "address": 7}]}),
+            json!({"users": [{"password": KEY, "port": 65536}]}),
+            json!({"users": false, "clients": []}), json!({"level": 256}),
+            json!({"clients": [{"password": KEY, "method": METHOD}]}),
+            json!({"users": [{"password": KEY, "address": "127.0.0.1", "port": 0}]}),
             json!({"method": "2022-blake3-chacha20-poly1305"}),
             json!({"method": "2022-unknown"}), json!({"password": "short"}),
             json!({"password": format!("{KEY}:{KEY}")}), json!({"uot": true}),
@@ -191,7 +271,7 @@ mod ss2022_tests {
         assert!(build_2022_outbound("ss", Some(&outbound), None, None).unwrap().is_some());
         for extra in [
             json!({"uot": true}), json!({"network": "udp"}),
-            json!({"password": format!("{KEY}:{KEY}")}), json!({"password": "invalid"}),
+            json!({"password": format!("{KEY}:invalid")}), json!({"password": "invalid"}),
             json!({"method": "2022-blake3-chacha20-poly1305"}),
             json!({"clients": [{"password": KEY}]}),
             json!({"port": 0}), json!({"address": ""}),
@@ -262,13 +342,14 @@ mod ss2022_tests {
             for (method, key, nested) in [
                 (METHOD, KEY, false),
                 ("2022-BLAKE3-AES-256-GCM", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=", true),
+                ("2022-blake3-chacha20-poly1305", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=", false),
             ] {
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let address = listener.local_addr().unwrap();
                 let endpoint = json!({"address": "127.0.0.1", "port": address.port(), "method": method, "password": key});
                 let settings = if nested { json!({"servers": [endpoint]}) } else { endpoint };
                 let config: Config = serde_json::from_value(json!({
-                    "inbounds": [{"tag": "ss-in", "protocol": "shadowsocks", "listen": "127.0.0.1", "port": 8388, "settings": {"method": method, "password": key, "network": "tcp"}}],
+                    "inbounds": [{"tag": "ss-in", "protocol": "shadowsocks", "listen": "127.0.0.1", "port": 8388, "settings": {"method": method, "password": key, "network": "tcp", "email": "single@example", "level": 9}}],
                     "outbounds": [{"tag": "ss-out", "protocol": "shadowsocks", "settings": settings}],
                 })).unwrap();
                 let mut built = config.build().unwrap();
@@ -278,6 +359,9 @@ mod ss2022_tests {
                     let (stream, remote) = listener.accept().await.unwrap();
                     let mut inbound = server.handle_connection(Box::pin(stream), remote).await.unwrap();
                     assert_eq!(inbound.session.destination, Destination::from_domain_port("example.com", 443));
+                    let user = inbound.session.user.as_ref().unwrap();
+                    assert_eq!(user.email, "single@example");
+                    assert_eq!(user.level, 9);
                     let mut payload = [0; 4];
                     inbound.stream.read_exact(&mut payload).await.unwrap();
                     assert_eq!(&payload, b"ping");
@@ -293,4 +377,79 @@ mod ss2022_tests {
             }
         }).await.unwrap();
     }
+
+    #[test]
+    fn ss2022_runtime_accepts_aes_users_clients_and_outbound_psk_chains() {
+        for field in ["users", "clients"] {
+            let mut raw = json!({"method": METHOD, "password": KEY, "network": "tcp"});
+            raw[field] = json!([{"password": KEY, "email": "user@example", "level": 4}]);
+            assert!(build_2022_inbound("multi", Some(&raw), None).unwrap().is_some());
+            raw[field] = json!([{"password": KEY, "address": "next-hop", "port": 8388}]);
+            assert!(build_2022_inbound("relay", Some(&raw), None).unwrap().is_some());
+        }
+        // clients overrides users, even when explicitly empty.
+        let raw = json!({"method": METHOD, "password": KEY, "clients": [], "users": [{"password": "invalid"}]});
+        assert!(build_2022_inbound("single", Some(&raw), None).unwrap().is_some());
+        let raw = json!({"address": "127.0.0.1", "port": 8388, "method": METHOD, "password": format!("{KEY}:{KEY}:{KEY}")});
+        assert!(build_2022_outbound("chain", Some(&raw), None, None).unwrap().is_some());
+        let raw = json!({"method": "2022-blake3-chacha20-poly1305", "password": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=", "users": [{"password": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="}]});
+        assert!(build_2022_inbound("bad", Some(&raw), None).is_err());
+    }
+
+    #[tokio::test]
+    async fn ss2022_runtime_config_routes_relay_chain_to_authenticated_user() {
+        use base64::Engine as _;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            for (method, key_len) in [(METHOD, 16), ("2022-blake3-aes-256-gcm", 32)] {
+                let keys: Vec<String> = (1..=3).map(|byte| {
+                    base64::engine::general_purpose::STANDARD.encode(vec![byte; key_len])
+                }).collect();
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let config: Config = serde_json::from_value(json!({
+                    "inbounds": [
+                        {"tag": "relay", "protocol": "shadowsocks", "port": 8388, "settings": {
+                            "method": method, "password": keys[0], "network": "tcp",
+                            "users": [{"password": keys[1], "address": "next-hop", "port": 8389, "email": "relay@example", "level": 5}],
+                        }},
+                        {"tag": "multi", "protocol": "shadowsocks", "port": 8389, "settings": {
+                            "method": method, "password": keys[1], "network": "tcp",
+                            "clients": [{"password": keys[2], "email": "user@example", "level": 7}],
+                        }},
+                    ],
+                    "outbounds": [{"tag": "chain", "protocol": "shadowsocks", "settings": {
+                        "address": "127.0.0.1", "port": address.port(), "method": method, "password": keys.join(":"),
+                    }}],
+                })).unwrap();
+                let mut built = config.build().unwrap();
+                let relay = built.inbounds.remove(0).1;
+                let multi = built.inbounds.remove(0).1;
+                let client = built.outbounds.remove("chain").unwrap();
+                let worker = tokio::spawn(async move {
+                    let (stream, remote) = listener.accept().await.unwrap();
+                    let forwarded = relay.handle_connection(Box::pin(stream), remote).await.unwrap();
+                    assert_eq!(forwarded.session.destination, Destination::from_domain_port("next-hop", 8389));
+                    assert_eq!(forwarded.session.user.unwrap().email, "relay@example");
+                    let mut accepted = multi.handle_connection(forwarded.stream, remote).await.unwrap();
+                    assert_eq!(accepted.session.destination, Destination::from_domain_port("example.com", 443));
+                    let user = accepted.session.user.as_ref().unwrap();
+                    assert_eq!(user.email, "user@example");
+                    assert_eq!(user.level, 7);
+                    let mut payload = [0; 4];
+                    accepted.stream.read_exact(&mut payload).await.unwrap();
+                    assert_eq!(&payload, b"ping");
+                    accepted.stream.write_all(b"pong").await.unwrap();
+                    accepted.stream.shutdown().await.unwrap();
+                });
+                let session = SessionContext::new("test", Destination::from_domain_port("example.com", 443));
+                let mut stream = client.connect(&session).await.unwrap();
+                stream.write_all(b"ping").await.unwrap();
+                let mut response = Vec::new();
+                stream.read_to_end(&mut response).await.unwrap();
+                assert_eq!(response, b"pong");
+                worker.await.unwrap();
+            }
+        }).await.unwrap();
+    }
+
 }

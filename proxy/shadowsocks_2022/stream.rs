@@ -1,7 +1,7 @@
-//! Single-user SIP022 AES-GCM TCP framing, ported from Go cipher/kdf/stream.go.
+//! SIP022 TCP framing around the official Rust cipher engine, matching Go stream.go.
 //! The two directions have independent salts, session keys and nonce counters.
 use crate::common::net::{Address, BoxStream, Destination, Network};
-use rand::{Rng, RngCore};
+use rand::{RngExt, TryRng};
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::pin::Pin;
@@ -28,7 +28,7 @@ pub(crate) fn validate_timestamp(timestamp: u64, now: u64) -> io::Result<()> {
 
 fn random_salt(method: CipherMethod) -> io::Result<Vec<u8>> {
     let mut salt = vec![0; method.key_length()];
-    rand::rngs::OsRng.try_fill_bytes(&mut salt).map_err(io::Error::other)?;
+    rand::rngs::SysRng.try_fill_bytes(&mut salt).map_err(io::Error::other)?;
     Ok(salt)
 }
 
@@ -111,6 +111,12 @@ async fn read_request<R: AsyncRead + Unpin>(
 ) -> io::Result<Request> {
     let mut salt = vec![0; method.key_length()];
     stream.read_exact(&mut salt).await?;
+    read_request_with_salt(stream, method, key, salt, now).await
+}
+
+async fn read_request_with_salt<R: AsyncRead + Unpin>(
+    stream: &mut R, method: CipherMethod, key: &[u8], salt: Vec<u8>, now: Option<u64>,
+) -> io::Result<Request> {
     let mut cipher = CipherState::new(method, key, &salt)?;
     let mut fixed = vec![0; REQUEST_FIXED_LENGTH + AEAD_TAG_SIZE];
     stream.read_exact(&mut fixed).await?;
@@ -176,27 +182,42 @@ pub(crate) fn decode_response_header(
     Ok((cipher, length))
 }
 
-pub async fn connect_tcp(mut stream: BoxStream, method: CipherMethod, key: Vec<u8>, destination: &Destination) -> io::Result<EncryptedStream> {
+pub async fn connect_tcp(stream: BoxStream, method: CipherMethod, key: Vec<u8>, destination: &Destination) -> io::Result<EncryptedStream> {
+    connect_tcp_chain(stream, method, vec![key], destination).await
+}
+
+pub async fn connect_tcp_chain(mut stream: BoxStream, method: CipherMethod, psks: Vec<Vec<u8>>, destination: &Destination) -> io::Result<EncryptedStream> {
+    super::identity::validate_psks(method, &psks)?;
+    let key = psks.last().ok_or_else(|| invalid_data("empty SS2022 PSK chain"))?.clone();
     let salt = random_salt(method)?;
-    // connect() has no payload yet: padding is mandatory in the variable header.
-    let padding_length = rand::thread_rng().gen_range(1..=MAX_PADDING_LENGTH);
+    let padding_length = rand::rng().random_range(1..=MAX_PADDING_LENGTH);
     let (request, writer) = encode_request(method, &key, &salt, destination, &vec![0; padding_length], &[], unix_time()?)?;
-    stream.write_all(&request).await?;
+    let identities = super::identity::tcp_headers(method, &psks, &salt)?;
+    let mut wire = Vec::with_capacity(request.len() + identities.len());
+    wire.extend_from_slice(&salt);
+    wire.extend(identities);
+    wire.extend_from_slice(&request[salt.len()..]);
+    stream.write_all(&wire).await?;
     stream.flush().await?;
-    // Response verification is lazy; waiting here deadlocks request-driven servers.
     let response = ResponseContext { method, key, client_salt: salt };
     Ok(EncryptedStream::new(stream, None, Some(writer), ReadStage::ResponseHeader(response), Vec::new(), None))
 }
 
-pub async fn accept_tcp(
-    mut stream: BoxStream, method: CipherMethod, key: Vec<u8>, replay: &ReplayFilter,
-) -> io::Result<(Destination, EncryptedStream)> {
-    let request = read_request(&mut stream, method, &key, None).await?;
-    // An unauthenticated/invalid request must never poison the shared salt cache.
+fn finish_accept(stream: BoxStream, method: CipherMethod, key: Vec<u8>, request: Request, replay: &ReplayFilter) -> io::Result<(Destination, EncryptedStream)> {
     replay.check_and_insert(&request.salt)?;
     let response = ResponseContext { method, key, client_salt: request.salt };
     let encrypted = EncryptedStream::new(stream, Some(request.cipher), None, ReadStage::Length, request.early_data, Some(response));
     Ok((request.destination, encrypted))
+}
+
+pub async fn accept_tcp(mut stream: BoxStream, method: CipherMethod, key: Vec<u8>, replay: &ReplayFilter) -> io::Result<(Destination, EncryptedStream)> {
+    let request = read_request(&mut stream, method, &key, None).await?;
+    finish_accept(stream, method, key, request, replay)
+}
+
+pub(crate) async fn accept_tcp_with_salt(mut stream: BoxStream, method: CipherMethod, key: Vec<u8>, salt: Vec<u8>, replay: &ReplayFilter) -> io::Result<(Destination, EncryptedStream)> {
+    let request = read_request_with_salt(&mut stream, method, &key, salt, None).await?;
+    finish_accept(stream, method, key, request, replay)
 }
 
 struct ResponseContext {
