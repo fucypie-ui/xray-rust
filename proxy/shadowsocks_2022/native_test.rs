@@ -215,7 +215,18 @@ async fn ss2022_native_bind_atomicity_and_explicit_network_role_errors() {
     assert!(MultiUserServer::new("bad", CipherMethod::ChaCha20Poly1305, vec![1; 32]).is_err());
     assert!(RelayServer::new("bad", CipherMethod::ChaCha20Poly1305, vec![1; 32], Vec::new()).is_err());
     for network in [None, Some("udp"), Some("tcp,udp")] {
-        assert!(matches!(RelayServer::new("relay", method, vec![1; 16], Vec::new()).unwrap().with_network(network), Err(Error::Unsupported(_))));
+        let relay = RelayServer::new("relay", method, vec![1; 16], Vec::new()).unwrap().with_network(network).unwrap();
+        let listener = relay.bind_native("127.0.0.1:0".parse().unwrap()).await.unwrap().expect("relay must retain native UDP selection");
+        let address = listener.local_addr().unwrap();
+        assert!(UdpSocket::bind(address).await.is_err());
+        let tcp = TcpListener::bind(address).await;
+        assert_eq!(tcp.is_err(), network != Some("udp"));
+        drop(tcp);
+        relay.close().await.unwrap();
+        // Close must release both sockets even while the listener is retained.
+        drop((UdpSocket::bind(address).await.unwrap(), TcpListener::bind(address).await.unwrap()));
+        assert!(matches!(relay.bind_native(address).await, Err(Error::Closed)));
+        drop(listener);
     }
     let relay = RelayServer::new("relay", method, vec![1; 16], Vec::new()).unwrap().with_network(Some("tcp")).unwrap();
     assert!(relay.bind_native("127.0.0.1:0".parse().unwrap()).await.unwrap().is_none());

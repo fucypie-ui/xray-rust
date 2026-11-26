@@ -39,6 +39,9 @@ mod native;
 mod native_test;
 
 #[cfg(test)]
+mod relay_native_test;
+
+#[cfg(test)]
 mod extended_test;
 
 #[cfg(test)]

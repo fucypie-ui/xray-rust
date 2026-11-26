@@ -754,25 +754,52 @@ mod ss2022_tests {
         }
     }
 
-    #[test]
-    fn ss2022_runtime_relay_keeps_tcp_and_rejects_native_udp() {
-        for field in ["users", "clients"] {
-            for network in [None, Some(Value::Null), Some(json!("tcp")), Some(json!(["TCP"]))] {
-                let mut settings = json!({"method": METHOD, "password": KEY});
-                settings[field] = json!([{"password": KEY, "address": "next-hop", "port": 8389}]);
-                if let Some(network) = network { settings["network"] = network; }
-                assert!(build_2022_inbound("relay", Some(&settings), None).unwrap().is_some());
+    #[tokio::test]
+    async fn ss2022_runtime_relay_preserves_tcp_udp_network_selection() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            for (method, key) in [
+                (METHOD, KEY),
+                ("2022-blake3-aes-256-gcm", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="),
+            ] {
+                for field in ["users", "clients"] {
+                    for (network, tcp, udp) in [
+                        (None, true, false), (Some(Value::Null), true, false),
+                        (Some(json!("tcp")), true, false), (Some(json!(["TCP"])), true, false),
+                        (Some(json!("udp")), false, true), (Some(json!(["UDP"])), false, true),
+                        (Some(json!("tcp,udp")), true, true),
+                        (Some(json!(["UDP", "TCP", "udp"])), true, true), (Some(json!([])), true, true),
+                    ] {
+                        let mut settings = json!({"method": method, "password": key});
+                        settings[field] = json!([{"password": key, "address": "next-hop", "port": 8389}]);
+                        if let Some(network) = &network { settings["network"] = network.clone(); }
+                        let config: Config = serde_json::from_value(json!({"inbounds": [{
+                            "tag": "relay", "protocol": "shadowsocks", "port": 8388, "settings": settings,
+                        }]})).unwrap();
+                        let relay = config.build().unwrap().inbounds.remove(0).1;
+                        let native = relay.bind_native("127.0.0.1:0".parse().unwrap()).await.unwrap();
+                        assert_eq!(native.is_some(), udp, "{method} {field} {network:?}");
+                        if let Some(native) = native {
+                            let address = native.local_addr().unwrap();
+                            assert!(tokio::net::UdpSocket::bind(address).await.is_err());
+                            let tcp_probe = tokio::net::TcpListener::bind(address).await;
+                            assert_eq!(tcp_probe.is_err(), tcp, "wrong relay TCP selection: {network:?}");
+                            drop(tcp_probe);
+                            if !tcp {
+                                let (stream, _peer) = tokio::io::duplex(64);
+                                let result = tokio::time::timeout(
+                                    Duration::from_secs(1), relay.handle_connection(Box::pin(stream), address),
+                                ).await.expect("UDP-only relay attempted a TCP handshake");
+                                assert!(matches!(result, Err(Error::Unsupported(_))));
+                            }
+                            relay.close().await.unwrap();
+                            assert!(matches!(relay.bind_native(address).await, Err(Error::Closed)));
+                            drop((tokio::net::UdpSocket::bind(address).await.unwrap(), tokio::net::TcpListener::bind(address).await.unwrap()));
+                            drop(native);
+                        }
+                    }
+                }
             }
-            for network in [json!("udp"), json!("tcp,udp"), json!(["UDP", "TCP"]), json!([])] {
-                let mut settings = json!({"method": METHOD, "password": KEY, "network": network});
-                settings[field] = json!([{"password": KEY, "address": "next-hop", "port": 8389}]);
-                let config: Config = serde_json::from_value(json!({"inbounds": [{
-                    "protocol": "shadowsocks", "port": 8388, "settings": settings,
-                }]})).unwrap();
-                let error = config.build().err().expect("relay UDP must fail during configuration");
-                assert!(matches!(error, Error::Unsupported(message) if message.contains("relay")), "wrong rejection for {network}");
-            }
-        }
+        }).await.unwrap();
     }
 
     #[tokio::test]

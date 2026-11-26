@@ -76,6 +76,11 @@ impl AsyncWrite for ChildStream {
 }
 
 pub(super) async fn bind<S: PacketServer + 'static>(server: S, networks: Networks, state: &NativeState, address: SocketAddr) -> Result<Option<Box<dyn NativeInboundListener>>> {
+    let Some((bindings, address)) = bind_sockets(networks, state, address).await? else { return Ok(None); };
+    Ok(Some(Box::new(Listener { server: Arc::new(server), bindings, address, flows: HashMap::new(), sweep: tokio::time::interval(Duration::from_secs(30)) })))
+}
+
+async fn bind_sockets(networks: Networks, state: &NativeState, address: SocketAddr) -> Result<Option<(Arc<Bindings>, SocketAddr)>> {
     if state.cancelled.is_cancelled() { return Err(Error::Closed); }
     if !networks.udp { return Ok(None); }
     // Bind both sockets before returning. Failure to bind UDP drops the TCP
@@ -91,7 +96,7 @@ pub(super) async fn bind<S: PacketServer + 'static>(server: S, networks: Network
         listeners.retain(|listener| listener.strong_count() != 0);
         listeners.push(Arc::downgrade(&bindings));
     }
-    Ok(Some(Box::new(Listener { server: Arc::new(server), bindings, address, flows: HashMap::new(), sweep: tokio::time::interval(Duration::from_secs(30)) })))
+    Ok(Some((bindings, address)))
 }
 
 struct Flow {
@@ -250,3 +255,192 @@ impl DatagramTransport for IncomingPackets {
 }
 
 pub(super) fn udp_destination(address: SocketAddr) -> Destination { Destination::udp(address.ip().into(), address.port()) }
+
+// Pinned Go inbound_relay.go caches one link by the original client session ID,
+// before rewriting its header. It never decrypts the body or encrypts a reply.
+// Keep this separate from PacketServer: endpoint authentication/replay rules
+// must not accidentally turn a relay into a terminating SS2022 server.
+#[derive(Clone, Copy)]
+pub(super) struct RelayLimits {
+    pub flows: usize,
+    pub queue: usize,
+    pub peers: usize,
+    pub idle: Duration,
+    pub sweep: Duration,
+}
+impl Default for RelayLimits {
+    fn default() -> Self {
+        Self { flows: MAX_FLOWS, queue: FLOW_QUEUE, peers: MAX_PEER_ADDRESSES, idle: SESSION_IDLE, sweep: Duration::from_secs(30) }
+    }
+}
+
+pub(super) async fn bind_relay(server: super::relay_server::RelayServer, networks: Networks, state: &NativeState, address: SocketAddr) -> Result<Option<Box<dyn NativeInboundListener>>> {
+    bind_relay_with_limits(server, networks, state, address, RelayLimits::default()).await
+}
+
+// Internal limits make the same bounded production path testable without
+// waiting 500 seconds. They are not new configuration or environment options.
+pub(super) async fn bind_relay_with_limits(server: super::relay_server::RelayServer, networks: Networks, state: &NativeState, address: SocketAddr, limits: RelayLimits) -> Result<Option<Box<dyn NativeInboundListener>>> {
+    if limits.flows == 0 || limits.queue == 0 || limits.peers == 0 || limits.idle.is_zero() || limits.sweep.is_zero() {
+        return Err(Error::Config("SS2022 relay limits must be positive".into()));
+    }
+    let Some((bindings, address)) = bind_sockets(networks, state, address).await? else { return Ok(None); };
+    Ok(Some(Box::new(RelayListener { server: Arc::new(server), bindings, address, flows: HashMap::new(), limits, sweep: tokio::time::interval(limits.sweep) })))
+}
+
+struct RelayPeer {
+    remote: SocketAddr,
+    peers: HashSet<Destination>,
+    active: Instant,
+}
+struct RelayFlow {
+    sender: mpsc::Sender<Datagram>,
+    source: Destination,
+    destination: Destination,
+    peer: Arc<Mutex<RelayPeer>>,
+    cancelled: CancellationToken,
+}
+impl Drop for RelayFlow { fn drop(&mut self) { self.cancelled.cancel(); } }
+
+struct RelayListener {
+    server: Arc<super::relay_server::RelayServer>,
+    bindings: Arc<Bindings>,
+    address: SocketAddr,
+    flows: HashMap<u64, RelayFlow>,
+    limits: RelayLimits,
+    sweep: tokio::time::Interval,
+}
+impl Drop for RelayListener { fn drop(&mut self) { self.bindings.stop(); } }
+impl RelayListener {
+    fn expire(&mut self) {
+        let idle = self.limits.idle;
+        self.flows.retain(|_, flow| !flow.cancelled.is_cancelled() && !flow.sender.is_closed() && flow.peer.lock().is_ok_and(|peer| peer.active.elapsed() < idle));
+    }
+    fn incoming(&mut self, incoming: super::relay_server::RelayDatagram, remote: SocketAddr, dispatcher: Arc<dyn InboundDispatcher>) -> Result<Option<InboundTask>> {
+        self.expire();
+        let id = incoming.session_id;
+        let source = udp_destination(remote);
+        if let Some(flow) = self.flows.get_mut(&id) {
+            {
+                let mut peer = flow.peer.lock().map_err(|_| Error::Other("SS2022 relay peer lock poisoned".into()))?;
+                if peer.peers.len() >= self.limits.peers && !peer.peers.contains(&source) { return Ok(None); }
+                peer.peers.insert(source);
+                peer.remote = remote;
+                peer.active = Instant::now();
+            }
+            // Both metadata values stay at their first-dispatch values. The
+            // shared dispatcher keys outbound routes by source+destination;
+            // exposing the rebinding address here would open a new route. Go
+            // also retains the first link/destination/user on an ID collision.
+            let _ = flow.sender.try_send(Datagram { payload: Bytes::from(incoming.wire), source: Some(flow.source.clone()), destination: flow.destination.clone() });
+            return Ok(None);
+        }
+        if self.flows.len() >= self.limits.flows { return Ok(None); }
+        let mut session = SessionContext::new(self.server.tag(), incoming.destination.clone());
+        session.source = Some(remote);
+        session.user = Some(incoming.user);
+        let (sender, receiver) = mpsc::channel(self.limits.queue);
+        sender.try_send(Datagram { payload: Bytes::from(incoming.wire), source: Some(source.clone()), destination: incoming.destination.clone() }).map_err(|_| Error::Closed)?;
+        let cancelled = self.bindings.cancelled.child_token();
+        let peer = Arc::new(Mutex::new(RelayPeer { remote, peers: HashSet::from([source.clone()]), active: Instant::now() }));
+        let transport = Arc::new(RelayPackets { bindings: self.bindings.clone(), peer: peer.clone(), receiver: AsyncMutex::new(receiver), cancelled: cancelled.clone() });
+        self.flows.insert(id, RelayFlow { sender, source, destination: incoming.destination, peer, cancelled: cancelled.clone() });
+        let guard = CancelOnDrop(cancelled.clone());
+        Ok(Some(Box::pin(async move {
+            let _guard = guard;
+            tokio::select! {
+                biased;
+                _ = cancelled.cancelled() => Ok(()),
+                result = dispatcher.dispatch_datagrams(transport, session) => result,
+            }
+        })))
+    }
+}
+
+#[async_trait]
+impl NativeInboundListener for RelayListener {
+    fn local_addr(&self) -> Result<SocketAddr> { Ok(self.address) }
+    async fn accept(&mut self, dispatcher: Arc<dyn InboundDispatcher>) -> Result<InboundTask> {
+        let udp = self.bindings.udp()?;
+        let tcp = self.bindings.tcp.lock().map_err(|_| Error::Other("SS2022 relay TCP socket lock poisoned".into()))?.clone();
+        let mut buffer = vec![0; MAX_DATAGRAM_SIZE + 1];
+        loop {
+            if self.bindings.cancelled.is_cancelled() { return Err(Error::Closed); }
+            tokio::select! {
+                _ = self.bindings.cancelled.cancelled() => return Err(Error::Closed),
+                _ = self.sweep.tick() => self.expire(),
+                accepted = async {
+                    match &tcp { Some(listener) => listener.accept().await, None => std::future::pending().await }
+                } => {
+                    let (stream, remote) = accepted?;
+                    let stream = Arc::new(TcpChild(Mutex::new(Some(stream))));
+                    {
+                        let mut connections = self.bindings.connections.lock().map_err(|_| Error::Other("SS2022 relay TCP child lock poisoned".into()))?;
+                        if self.bindings.cancelled.is_cancelled() { return Err(Error::Closed); }
+                        connections.retain(|connection| connection.strong_count() != 0);
+                        connections.push(Arc::downgrade(&stream));
+                    }
+                    let stream = ChildStream(stream);
+                    let server = self.server.clone();
+                    let cancelled = self.bindings.cancelled.clone();
+                    return Ok(Box::pin(async move {
+                        tokio::select! {
+                            biased; _ = cancelled.cancelled() => Ok(()),
+                            result = server.dispatch_connection(Box::pin(stream), remote, dispatcher) => result,
+                        }
+                    }));
+                }
+                received = udp.recv_from(&mut buffer) => {
+                    let (length, remote) = received?;
+                    if length > MAX_DATAGRAM_SIZE { continue; }
+                    let incoming = match self.server.relay_datagram(&buffer[..length]) {
+                        Ok(packet) => packet,
+                        Err(Error::Protocol(_)) => continue,
+                        Err(Error::Io(error)) if error.kind() == io::ErrorKind::InvalidData => continue,
+                        Err(error) => return Err(error),
+                    };
+                    if let Some(task) = self.incoming(incoming, remote, dispatcher.clone())? { return Ok(task); }
+                }
+            }
+        }
+    }
+}
+
+struct RelayPackets {
+    bindings: Arc<Bindings>,
+    peer: Arc<Mutex<RelayPeer>>,
+    receiver: AsyncMutex<mpsc::Receiver<Datagram>>,
+    cancelled: CancellationToken,
+}
+impl Drop for RelayPackets { fn drop(&mut self) { self.cancelled.cancel(); } }
+#[async_trait]
+impl DatagramTransport for RelayPackets {
+    async fn recv(&self) -> Result<Option<Datagram>> {
+        tokio::select! {
+            biased;
+            _ = self.cancelled.cancelled() => Ok(None),
+            packet = async { self.receiver.lock().await.recv().await } => Ok(packet),
+        }
+    }
+    async fn send(&self, packet: Datagram) -> Result<()> {
+        if self.cancelled.is_cancelled() { return Err(Error::Closed); }
+        if packet.payload.len() > MAX_DATAGRAM_SIZE { return Err(Error::BufferOverflow); }
+        if packet.source.as_ref().is_some_and(|source| source.network != Network::Udp) { return Err(Error::Protocol("SS2022 relay reply source must use UDP".into())); }
+        let remote = {
+            let peer = self.peer.lock().map_err(|_| Error::Other("SS2022 relay peer lock poisoned".into()))?;
+            if !peer.peers.contains(&packet.destination) { return Err(Error::Protocol("SS2022 relay reply is addressed to another association".into())); }
+            peer.remote
+        };
+        let socket = self.bindings.udp()?;
+        tokio::select! {
+            biased;
+            _ = self.cancelled.cancelled() => Err(Error::Closed),
+            written = socket.send_to(&packet.payload, remote) => {
+                if written? != packet.payload.len() { return Err(io::Error::new(io::ErrorKind::WriteZero, "short SS2022 relay UDP response").into()); }
+                self.peer.lock().map_err(|_| Error::Other("SS2022 relay peer lock poisoned".into()))?.active = Instant::now();
+                Ok(())
+            }
+        }
+    }
+    async fn close(&self) -> Result<()> { self.cancelled.cancel(); self.receiver.lock().await.close(); Ok(()) }
+}

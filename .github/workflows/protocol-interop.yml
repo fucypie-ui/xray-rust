@@ -46,6 +46,10 @@ jobs:
             filter: proxy::shadowsocks_2022::go_peer_test
             minimum: 2
             mode: --ignored
+          - engine: ss-classic
+            filter: proxy::shadowsocks::go_peer_test
+            minimum: 5
+            mode: --ignored
     defaults:
       run:
         shell: bash
@@ -102,6 +106,11 @@ jobs:
               bash testing/ss2022-reference/build-peer.sh "$GITHUB_WORKSPACE/go-reference" "$output_directory/ss2022-go-peer"
               test -x "$output_directory/ss2022-go-peer"
               printf 'XRAY_SS2022_GO_PEER=%s/ss2022-go-peer\n' "$output_directory" >> "$GITHUB_ENV"
+              ;;
+            ss-classic)
+              bash testing/shadowsocks-reference/build-peer.sh "$GITHUB_WORKSPACE/go-reference" "$output_directory/classic-go-peer"
+              test -x "$output_directory/classic-go-peer"
+              printf 'XRAY_SS_CLASSIC_GO_PEER=%s/classic-go-peer\n' "$output_directory" >> "$GITHUB_ENV"
               ;;
             *) exit 2 ;;
           esac

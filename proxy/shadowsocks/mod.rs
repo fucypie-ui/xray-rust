@@ -12,6 +12,9 @@ mod native;
 #[cfg(test)]
 mod runtime_test;
 
+#[cfg(test)]
+mod go_peer_test;
+
 pub use client::Client;
 pub use config::ShadowsocksConfig;
 pub use inbound::Server as InboundServer;

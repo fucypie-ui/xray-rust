@@ -1,27 +1,26 @@
 //! An AES relay removes exactly one EIH and forwards the remaining encrypted stream.
-use std::{collections::HashMap, net::SocketAddr, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use tokio::io::AsyncReadExt;
-use crate::{common::{errors::{Error, Result}, net::{BoxStream, Destination, Network}, protocol::{SessionContext, User}}, features::inbound::{InboundHandler, InboundResult}};
+use crate::{common::{errors::{Error, Result}, net::{BoxStream, Destination, Network}, protocol::{SessionContext, User}}, features::inbound::{InboundHandler, InboundResult, NativeInboundListener}};
 use super::{cipher::CipherMethod, identity::{PrefixedStream, tcp_identity}, kdf::user_psk_hash};
 
 #[derive(Clone)]
 pub struct RelayTarget { pub key: Vec<u8>, pub destination: Destination, pub user: User }
 
+#[derive(Clone)]
 pub struct RelayServer {
     tag: String,
     pub(crate) method: CipherMethod,
     pub(crate) key: Vec<u8>,
     targets: HashMap<[u8; 16], RelayTarget>,
+    networks: super::config::Networks,
+    native: Arc<super::native::NativeState>,
 }
 
 impl RelayServer {
-    /// Native UDP relay routes need a separate cached, passthrough lifecycle.
-    /// Never accept UDP settings and silently start the TCP fallback instead.
-    pub fn with_network(self, network: Option<&str>) -> Result<Self> {
-        if super::config::Networks::parse(network)?.udp {
-            return Err(Error::Unsupported("SS2022 native relay UDP route lifecycle is not implemented".into()));
-        }
+    pub fn with_network(mut self, network: Option<&str>) -> Result<Self> {
+        self.networks = super::config::Networks::parse(network)?;
         Ok(self)
     }
     pub fn new(tag: impl Into<String>, method: CipherMethod, key: Vec<u8>, targets: Vec<RelayTarget>) -> Result<Self> {
@@ -31,10 +30,14 @@ impl RelayServer {
             if target.key.len() != method.key_length() || target.destination.network != Network::Tcp || target.destination.port == 0 { return Err(Error::Config("invalid SS2022 relay destination".into())); }
             by_hash.insert(user_psk_hash(&target.key), target);
         }
-        Ok(Self { tag: tag.into(), method, key, targets: by_hash })
+        Ok(Self { tag: tag.into(), method, key, targets: by_hash, networks: super::config::Networks::BOTH, native: Arc::new(super::native::NativeState::default()) })
     }
     pub fn target(&self, hash: &[u8; 16]) -> Result<RelayTarget> {
         self.targets.get(hash).cloned().ok_or_else(|| Error::Protocol("unknown SS2022 relay identity".into()))
+    }
+    #[cfg(test)]
+    pub(super) async fn bind_with_limits(&self, address: SocketAddr, limits: super::native::RelayLimits) -> Result<Option<Box<dyn NativeInboundListener>>> {
+        super::native::bind_relay_with_limits(self.clone(), self.networks, &self.native, address, limits).await
     }
     async fn accept(&self, mut stream: BoxStream, remote: SocketAddr) -> Result<InboundResult> {
         let mut salt = vec![0; self.method.key_length()];
@@ -59,7 +62,12 @@ impl RelayServer {
 #[async_trait]
 impl InboundHandler for RelayServer {
     fn tag(&self) -> &str { &self.tag }
+    async fn close(&self) -> Result<()> { self.native.close(); Ok(()) }
+    async fn bind_native(&self, address: SocketAddr) -> Result<Option<Box<dyn NativeInboundListener>>> {
+        super::native::bind_relay(self.clone(), self.networks, &self.native, address).await
+    }
     async fn handle_connection(&self, stream: BoxStream, remote: SocketAddr) -> Result<InboundResult> {
+        if !self.networks.tcp { return Err(Error::Unsupported("SS2022 relay inbound TCP is disabled".into())); }
         tokio::time::timeout(Duration::from_secs(10), self.accept(stream, remote)).await.map_err(|_| Error::Timeout)?
     }
 }
