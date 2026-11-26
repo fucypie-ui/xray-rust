@@ -18,6 +18,8 @@ use crate::features::outbound::OutboundHandler;
 use crate::features::routing::RouterFeature;
 use crate::transport::internet::tls::tls::TlsClient;
 
+const MAX_DOH_RESPONSE_LEN: usize = 65536;
+
 pub struct DohRoutingCtx {
     pub router: Router,
     pub outbounds: HashMap<String, Arc<dyn OutboundHandler>>,
@@ -148,7 +150,7 @@ impl DohNameServer {
             *guard = None;
         }
         let tcp_stream = self.dial_transport(host, port).await?;
-        let tls_client = TlsClient::new(host, true, vec![b"h2".to_vec()])?;
+        let tls_client = TlsClient::new(host, false, vec![b"h2".to_vec()])?;
         let tls_stream = pingora_timeout::timeout(self.timeout, tls_client.connect(host, tcp_stream))
             .await.map_err(|_| Error::Protocol(format!("DoH TLS handshake timeout with '{}'", host)))??;
         let (send_req, h2_conn) = pingora_timeout::timeout(
@@ -197,15 +199,30 @@ impl DohNameServer {
             .map_err(|_| Error::Protocol("DoH H2 response timeout".into()))?
             .map_err(|e| Error::Protocol(format!("DoH H2 response error: {}", e)))?;
         let status = resp.status();
+        let mut content_len = None;
+        for value in resp.headers().get_all(http::header::CONTENT_LENGTH) {
+            content_len = Some(parse_content_length(value.as_bytes(), content_len)?);
+        }
         let mut body_stream = resp.into_body();
         let mut out = Vec::with_capacity(512);
         while let Some(chunk_res) = pingora_timeout::timeout(self.timeout, body_stream.data())
             .await.map_err(|_| Error::Protocol("DoH H2 body read timeout".into()))?
         {
             let chunk = chunk_res.map_err(|e| Error::Protocol(format!("DoH H2 body chunk error: {}", e)))?;
+            let length = out.len().checked_add(chunk.len())
+                .filter(|length| *length <= MAX_DOH_RESPONSE_LEN)
+                .ok_or_else(|| Error::Protocol("DoH H2 response exceeds size limit".into()))?;
+            if content_len.is_some_and(|declared| length > declared) {
+                return Err(Error::Protocol("DoH H2 body exceeds Content-Length".into()));
+            }
             let _ = body_stream.flow_control().release_capacity(chunk.len());
             out.extend_from_slice(&chunk);
-            if out.len() > 65536 { break; }
+        }
+        let _ = pingora_timeout::timeout(self.timeout, body_stream.trailers()).await
+            .map_err(|_| Error::Protocol("DoH H2 trailers timeout".into()))?
+            .map_err(|e| Error::Protocol(format!("DoH H2 trailers error: {}", e)))?;
+        if content_len.is_some_and(|declared| out.len() != declared) {
+            return Err(Error::Protocol("Incomplete DoH H2 body (Content-Length mismatch)".into()));
         }
         if status != http::StatusCode::OK {
             return Err(Error::Protocol(format!("DoH server responded with HTTP {}", status.as_u16())));
@@ -254,64 +271,106 @@ impl DohNameServer {
         .await.map_err(|_| Error::Timeout)?.map_err(Error::Io)?;
         let mut buf = Vec::with_capacity(2048);
         let mut chunk = [0u8; 1024];
-        let (mut header_len, mut content_len, mut is_chunked, mut decoded_chunked) = (0, None, false, None);
-        while buf.len() < 65536 {
+        let (mut header_len, mut content_len, mut is_chunked) = (0, None, false);
+        loop {
             let n = pingora_timeout::timeout(self.timeout, stream.read(&mut chunk))
                 .await
                 .map_err(|_| Error::Protocol(format!("DoH HTTP read timeout (buf_len={}, header_len={}, chunked={})", buf.len(), header_len, is_chunked)))?
                 .map_err(Error::Io)?;
-            if n == 0 { break; }
+            if n == 0 {
+                if header_len == 0 { return Err(Error::Protocol("Invalid DoH HTTP headers".into())); }
+                if is_chunked { return Err(Error::Protocol("Incomplete DoH chunked response".into())); }
+                if content_len.is_some() { return Err(Error::Protocol("Incomplete DoH HTTP body".into())); }
+                return parse_dns_response_for_query(&buf[header_len..], &query);
+            }
+            buf.len().checked_add(n).filter(|length| *length <= MAX_DOH_RESPONSE_LEN)
+                .ok_or_else(|| Error::Protocol("DoH HTTP response exceeds size limit".into()))?;
             buf.extend_from_slice(&chunk[..n]);
             if header_len == 0 {
                 let mut headers = [httparse::EMPTY_HEADER; 32];
                 let mut resp = httparse::Response::new(&mut headers);
-                if let Ok(httparse::Status::Complete(hlen)) = resp.parse(&buf) {
+                if let httparse::Status::Complete(hlen) = resp.parse(&buf)
+                    .map_err(|e| Error::Protocol(format!("Invalid DoH HTTP headers: {}", e)))?
+                {
                     header_len = hlen;
                     if let Some(code) = resp.code && code != 200
                     { return Err(Error::Protocol(format!("DoH server responded with HTTP {}", code))); }
                     for h in resp.headers.iter() {
-                        let Ok(s) = std::str::from_utf8(h.value) else { continue };
                         if h.name.eq_ignore_ascii_case("content-length") {
-                            content_len = s.trim().parse::<usize>().ok();
-                        } else if h.name.eq_ignore_ascii_case("transfer-encoding")
-                            && s.to_ascii_lowercase().contains("chunked")
-                        { is_chunked = true; }
+                            content_len = Some(parse_content_length(h.value, content_len)?);
+                        } else if h.name.eq_ignore_ascii_case("transfer-encoding") {
+                            let encoding = std::str::from_utf8(h.value)
+                                .map_err(|_| Error::Protocol("Invalid DoH HTTP Transfer-Encoding".into()))?;
+                            if is_chunked || !encoding.trim().eq_ignore_ascii_case("chunked") {
+                                return Err(Error::Protocol("Invalid DoH HTTP Transfer-Encoding".into()));
+                            }
+                            is_chunked = true;
+                        }
+                    }
+                    if is_chunked && content_len.is_some() {
+                        return Err(Error::Protocol("Ambiguous DoH HTTP response framing".into()));
+                    }
+                    if let Some(length) = content_len {
+                        header_len.checked_add(length).filter(|end| *end <= MAX_DOH_RESPONSE_LEN)
+                            .ok_or_else(|| Error::Protocol("DoH HTTP Content-Length exceeds size limit".into()))?;
                     }
                 }
             }
             if header_len > 0 {
-                if content_len.is_some_and(|clen| buf.len() >= header_len + clen) { break; }
-                if content_len.is_none()
-                    && is_chunked && let Some(decoded) = decode_chunked_complete(&buf[header_len..])
-                {
-                    decoded_chunked = Some(decoded);
-                    break;
+                if is_chunked {
+                    if let Some(body) = decode_chunked_complete(&buf[header_len..])? {
+                        return parse_dns_response_for_query(&body, &query);
+                    }
+                } else if let Some(length) = content_len {
+                    let end = header_len.checked_add(length)
+                        .ok_or_else(|| Error::Protocol("DoH HTTP Content-Length overflow".into()))?;
+                    if buf.len() >= end { return parse_dns_response_for_query(&buf[header_len..end], &query); }
                 }
             }
         }
-        if header_len == 0 || buf.len() <= header_len {
-            return Err(Error::Protocol("Invalid or empty DoH response".into()));
-        }
-        if let Some(body) = decoded_chunked { return parse_dns_response_for_query(&body, &query); }
-        let end = content_len.map_or(buf.len(), |clen| (header_len + clen).min(buf.len()));
-        parse_dns_response_for_query(&buf[header_len..end], &query)
     }
 }
 
-fn decode_chunked_complete(input: &[u8]) -> Option<Vec<u8>> {
-    let (mut out, mut pos) = (Vec::new(), 0);
+fn parse_content_length(value: &[u8], previous: Option<usize>) -> Result<usize> {
+    let invalid = || Error::Protocol("Invalid or conflicting DoH HTTP Content-Length".into());
+    let value = std::str::from_utf8(value).map_err(|_| invalid())?.trim();
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) { return Err(invalid()); }
+    let length = value.parse::<usize>().map_err(|_| invalid())?;
+    if length > MAX_DOH_RESPONSE_LEN {
+        return Err(Error::Protocol("DoH HTTP Content-Length exceeds size limit".into()));
+    }
+    if previous.is_some_and(|old| old != length) { return Err(invalid()); }
+    Ok(length)
+}
+
+fn decode_chunked_complete(input: &[u8]) -> Result<Option<Vec<u8>>> {
+    let (mut out, mut pos) = (Vec::new(), 0usize);
+    let invalid = || Error::Protocol("Invalid or oversized DoH chunk framing".into());
     loop {
-        let rest = input.get(pos..)?;
-        let line_end = rest.windows(2).position(|w| w == b"\r\n")?;
-        let chunk_size = usize::from_str_radix(std::str::from_utf8(&rest[..line_end]).ok()?.split(';').next()?.trim(), 16).ok()?;
-        pos += line_end + 2;
+        let rest = input.get(pos..).ok_or_else(invalid)?;
+        let Some(line_end) = rest.windows(2).position(|w| w == b"\r\n") else { return Ok(None); };
+        let line = std::str::from_utf8(&rest[..line_end]).map_err(|_| invalid())?;
+        let size = line.split(';').next().ok_or_else(invalid)?.trim();
+        if size.is_empty() || !size.bytes().all(|byte| byte.is_ascii_hexdigit()) { return Err(invalid()); }
+        let chunk_size = usize::from_str_radix(size, 16).map_err(|_| invalid())?;
+        pos = pos.checked_add(line_end).and_then(|pos| pos.checked_add(2)).ok_or_else(invalid)?;
         if chunk_size == 0 {
-            let trailer = input.get(pos..)?;
-            return (trailer.starts_with(b"\r\n") || trailer.windows(4).any(|w| w == b"\r\n\r\n")).then_some(out);
+            let mut trailers = [httparse::EMPTY_HEADER; 32];
+            return match httparse::parse_headers(&input[pos..], &mut trailers)
+                .map_err(|_| invalid())?
+            {
+                httparse::Status::Complete(_) => Ok(Some(out)),
+                httparse::Status::Partial => Ok(None),
+            };
         }
-        if input.len() < pos + chunk_size + 2 { return None; }
-        out.extend_from_slice(&input[pos..pos + chunk_size]);
-        pos += chunk_size + 2;
+        out.len().checked_add(chunk_size).filter(|length| *length <= MAX_DOH_RESPONSE_LEN)
+            .ok_or_else(invalid)?;
+        let end = pos.checked_add(chunk_size).ok_or_else(invalid)?;
+        let next = end.checked_add(2).filter(|end| *end <= MAX_DOH_RESPONSE_LEN).ok_or_else(invalid)?;
+        if input.len() < next { return Ok(None); }
+        if &input[end..next] != b"\r\n" { return Err(invalid()); }
+        out.extend_from_slice(&input[pos..end]);
+        pos = next;
     }
 }
 
@@ -332,3 +391,7 @@ impl NameServer for DohNameServer {
         query_ip_families(domain, ipv4, ipv6, |qtype| self.execute_doh(domain, qtype)).await
     }
 }
+
+#[cfg(test)]
+#[path = "nameserver_doh_h2_test.rs"]
+mod h2_tests;
