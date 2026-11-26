@@ -83,9 +83,13 @@ idle expiry, duplicate suppression, and bounded incoming listener queues. A new
 packet ID/count replaces old fragment state, as in Go. Empty UDP payloads are
 explicitly rejected because Go's parser requires a nonempty payload. Concurrent
 sends on one association serialize fragments to avoid interleaving pending IDs.
-Outbound packet associations retain one original local source, including when
-remote replies use a different target address. They reject mixing multiple local
-sources into one association.
+Outbound packet associations retain one original packet source, falling back to
+the session source converted to UDP, then to the original destination if neither
+source is known. Explicit packet sources take precedence over socket metadata.
+Remote replies use that retained local address as destination and the actual
+remote wire address as source. Associations reject mixing multiple explicit local
+sources. Inbound replies encode their source as the wire address when present,
+falling back to the packet destination when the source is unknown.
 
 ## Go DATAGRAM transport-parameter policy
 

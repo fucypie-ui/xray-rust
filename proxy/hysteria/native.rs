@@ -57,39 +57,79 @@ impl DatagramTransport for InboundPackets {
     }
     async fn send(&self, packet: Datagram) -> Result<()> {
         if packet.destination != self.peer { return Err(Error::Protocol("Hysteria reply is addressed to a different client association".into())); }
-        let source = packet.source.ok_or_else(|| Error::Protocol("Hysteria reply requires the remote UDP origin".into()))?;
+        let source = packet.source.as_ref().unwrap_or(&packet.destination);
         self.session.send(&source.to_string(), &packet.payload).await
     }
     async fn close(&self) -> Result<()> { self.session.close(); Ok(()) }
 }
 
-pub(super) struct OutboundPackets { session: UdpSession, local: Mutex<Option<Destination>> }
+/// An explicit packet source takes precedence over the session's socket source.
+/// The original destination is used only when neither local source is known.
+struct ReplyAddress {
+    packet_source: Option<Destination>,
+    session_source: Option<Destination>,
+    fallback: Destination,
+}
+impl ReplyAddress {
+    fn new(context: &SessionContext) -> Self {
+        let session_source = context.source.map(|source| Destination::udp(source.ip().into(), source.port()));
+        let mut fallback = context.destination.clone();
+        fallback.network = Network::Udp;
+        Self { packet_source: None, session_source, fallback }
+    }
+    fn remember(&mut self, source: Option<Destination>) -> Result<()> {
+        if let Some(source) = source {
+            if self.packet_source.as_ref().is_some_and(|local| *local != source) {
+                return Err(Error::Protocol("Hysteria UDP association cannot mix original local sources".into()));
+            }
+            self.packet_source = Some(source);
+        }
+        Ok(())
+    }
+    fn destination(&self) -> Destination {
+        self.packet_source.as_ref().or(self.session_source.as_ref()).unwrap_or(&self.fallback).clone()
+    }
+}
+
+pub(super) struct OutboundPackets { session: UdpSession, reply_address: Mutex<ReplyAddress> }
 impl OutboundPackets {
     pub fn boxed(session: UdpSession, context: &SessionContext) -> BoxDatagram {
-        let local = context.source.map(|source| Destination::udp(source.ip().into(), source.port()));
-        Arc::new(Self { session, local: Mutex::new(local) })
+        Arc::new(Self { session, reply_address: Mutex::new(ReplyAddress::new(context)) })
     }
 }
 #[async_trait]
 impl DatagramTransport for OutboundPackets {
     async fn recv(&self) -> Result<Option<Datagram>> {
         let packet = match self.session.recv().await { Ok(packet) => packet, Err(Error::Closed) => return Ok(None), Err(error) => return Err(error) };
-        let local = self.local.lock().expect("Hysteria UDP local source mutex").clone().ok_or_else(|| Error::Protocol("Hysteria UDP response has no original local source".into()))?;
+        let local = self.reply_address.lock().expect("Hysteria UDP reply address mutex").destination();
         Ok(Some(Datagram { payload: Bytes::from(packet.data), source: Some(udp_destination(&packet.address)?), destination: local }))
     }
     async fn send(&self, packet: Datagram) -> Result<()> {
         if packet.destination.network != Network::Udp { return Err(Error::Protocol("Hysteria datagram destination must use UDP".into())); }
-        {
-            let mut local = self.local.lock().expect("Hysteria UDP local source mutex");
-            if let Some(source) = packet.source {
-                if local.as_ref().is_some_and(|local| *local != source) {
-                    return Err(Error::Protocol("Hysteria UDP association cannot mix original local sources".into()));
-                }
-                *local = Some(source);
-            }
-            if local.is_none() { return Err(Error::Protocol("Hysteria UDP send requires the original local source".into())); }
-        }
+        self.reply_address.lock().expect("Hysteria UDP reply address mutex").remember(packet.source)?;
         self.session.send(&packet.destination.to_string(), &packet.payload).await
     }
     async fn close(&self) -> Result<()> { self.session.close(); Ok(()) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn destination(address: &str) -> Destination { udp_destination(address).unwrap() }
+    #[test]
+    fn reply_uses_packet_source_then_session_source_then_original_destination() {
+        let mut context = SessionContext::new("test", destination("dns.example:53"));
+        let unknown = ReplyAddress::new(&context);
+        assert_eq!(unknown.destination(), destination("dns.example:53"));
+        context.source = Some("127.0.0.1:53000".parse().unwrap());
+        let mut addresses = ReplyAddress::new(&context);
+        assert_eq!(addresses.destination(), destination("127.0.0.1:53000"));
+        // A proxy's logical packet source can differ from its socket source.
+        addresses.remember(Some(destination("192.0.2.10:42000"))).unwrap();
+        assert_eq!(addresses.destination(), destination("192.0.2.10:42000"));
+        addresses.remember(None).unwrap();
+        assert_eq!(addresses.destination(), destination("192.0.2.10:42000"));
+        assert!(addresses.remember(Some(destination("192.0.2.11:42000"))).is_err());
+        assert_eq!(addresses.destination(), destination("192.0.2.10:42000"));
+    }
 }

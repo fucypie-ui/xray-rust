@@ -9,7 +9,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 fn vectors() -> Vec<Value> {
     // Compile-time inclusion makes the checked-in Go oracle mandatory.
     let frozen = include_bytes!("testdata/go-vectors.jsonl");
-    assert_eq!(format!("{:x}", Sha256::digest(frozen)), "6f5147a6034af06cbe7b2aa14873eaee96d893af63f554c761152f76879ad2f2");
+    assert_eq!(hex::encode(Sha256::digest(frozen)), "6f5147a6034af06cbe7b2aa14873eaee96d893af63f554c761152f76879ad2f2");
     let source = match std::env::var_os("XRAY_HYSTERIA_REFERENCE_FILE") {
         Some(path) => std::fs::read_to_string(path).expect("required external Hysteria reference fixture"),
         None => String::from_utf8(frozen.to_vec()).expect("UTF-8 Go fixture"),
