@@ -1,0 +1,141 @@
+// Independent oracle: compiled with the authoritative Go implementation.
+package kcp
+
+import (
+    "encoding/hex"
+    "encoding/json"
+    "os"
+    "testing"
+
+    "github.com/xtls/xray-core/common/buf"
+)
+
+type rustCapture struct { packets []string }
+func (w *rustCapture) Write(s Segment) error {
+    b := make([]byte, s.ByteSize())
+    s.Serialize(b)
+    w.packets = append(w.packets, hex.EncodeToString(b))
+    return nil
+}
+func (w *rustCapture) take() []string {
+    p := w.packets
+    w.packets = nil
+    if p == nil { return []string{} }
+    return p
+}
+type rustTrace struct {
+    At uint32 `json:"at"`
+    Side string `json:"side"`
+    Packets []string `json:"packets"`
+}
+type rustVector struct {
+    Name string `json:"name"`
+    Hex string `json:"hex"`
+    Parsed int `json:"parsed"`
+}
+func rustSerialize(s Segment) []byte {
+    b := make([]byte, s.ByteSize())
+    s.Serialize(b)
+    return b
+}
+func rustConn(conv uint16, config *Config, out SegmentWriter) *Connection {
+    c := &Connection{
+        meta: ConnMetadata{Conversation:conv},
+        Config: config, output: out, mss: config.Mtu - DataSegmentOverhead,
+        roundTrip: &RoundTripInfo{rto:100, minRtt:config.Tti},
+    }
+    c.receivingWorker = NewReceivingWorker(c)
+    c.sendingWorker = NewSendingWorker(c)
+    return c
+}
+func rustDeliver(c *Connection, packet string, current uint32) {
+    raw, err := hex.DecodeString(packet)
+    if err != nil { panic(err) }
+    for _, seg := range (&KCPPacketReader{}).Read(raw) {
+        switch s := seg.(type) {
+        case *DataSegment: c.receivingWorker.ProcessSegment(s)
+        case *AckSegment: c.sendingWorker.ProcessSegment(current,s,c.roundTrip.Timeout())
+        case *CmdOnlySegment:
+            c.sendingWorker.ProcessReceivingNext(s.ReceivingNext)
+            c.receivingWorker.ProcessSendingNext(s.SendingNext)
+            c.roundTrip.UpdatePeerRTO(s.PeerRTO,current)
+        }
+    }
+}
+func TestRustKCPReference(t *testing.T) {
+    var vectors []rustVector
+    add := func(name string, raw []byte) {
+        parsed := (&KCPPacketReader{}).Read(raw)
+        vectors = append(vectors,rustVector{name,hex.EncodeToString(raw),len(parsed)})
+        for _, s := range parsed { s.Release() }
+    }
+    d := NewDataSegment()
+    d.Conv=0x1234; d.Option=SegmentOptionClose; d.Timestamp=0xfffffff0
+    d.Number=0xfffffffe; d.SendingNext=0xfffffffc
+    d.Data().Write([]byte{0,1,0x7f,0x80,0xff})
+    data := rustSerialize(d)
+    add("data",data)
+    a := NewAckSegment(128)
+    a.Conv=0xabcd; a.Option=SegmentOptionClose
+    a.ReceivingWindow=0x10203040; a.ReceivingNext=0xfffffffe; a.Timestamp=0x12345678
+    for _, n := range []uint32{0,1,0x7fffffff,0xffffffff} { a.PutNumber(n) }
+    ack := rustSerialize(a)
+    add("ack",ack)
+    for _, cmd := range []Command{CommandPing,CommandTerminate,Command(99)} {
+        s:=NewCmdOnlySegment(); s.Conv=0xbeef; s.Cmd=cmd; s.Option=SegmentOptionClose
+        s.SendingNext=123; s.ReceivingNext=456; s.PeerRTO=789
+        add("command",rustSerialize(s))
+    }
+    add("compound",append(append([]byte{},data...),ack...))
+    add("truncated-data",data[:len(data)-1])
+    add("valid-prefix-invalid-tail",append(append([]byte{},ack...),1,2,3))
+    add("empty-data-at-end",make([]byte,0))
+    empty:=NewDataSegment(); empty.Conv=7; empty.Data()
+    add("empty-data-rejected",rustSerialize(empty)); empty.Release()
+    d.Release()
+
+    config:=&Config{Mtu:80,Tti:20,UplinkCapacity:1,DownlinkCapacity:1,CwndMultiplier:1,MaxSendingWindow:512}
+    clientOut,serverOut:=new(rustCapture),new(rustCapture)
+    client,server:=rustConn(7,config,clientOut),rustConn(7,config,serverOut)
+    payload:=make([]byte,150)
+    for i:=range payload { payload[i]=byte(i) }
+    for off:=0;off<len(payload);off+=62 {
+        end:=off+62; if end>len(payload) { end=len(payload) }
+        b:=buf.New(); b.Write(payload[off:end]); client.sendingWorker.Push(b)
+    }
+    var trace []rustTrace
+    flush:=func(c *Connection,w *rustCapture,side string,at uint32) []string {
+        c.receivingWorker.Flush(at); c.sendingWorker.Flush(at)
+        packets:=w.take(); trace=append(trace,rustTrace{at,side,packets}); return packets
+    }
+    packets:=flush(client,clientOut,"client",0)
+    // Drop segment zero, reverse the others, and duplicate the last one.
+    rustDeliver(server,packets[2],5); rustDeliver(server,packets[1],5)
+    var result [512]byte
+    if n:=server.receivingWorker.Read(result[:]);n!=0 { t.Fatal("read through gap",n) }
+    packets=flush(server,serverOut,"server",10)
+    for _,p:=range packets { rustDeliver(client,p,15) }
+    flush(client,clientOut,"client",66)
+    packets=flush(client,clientOut,"client",67)
+    for _,p:=range packets { rustDeliver(server,p,72) }
+    n:=server.receivingWorker.Read(result[:])
+    if n!=len(payload) { t.Fatal("incomplete stream",n) }
+    packets=flush(server,serverOut,"server",75)
+    for _,p:=range packets { rustDeliver(client,p,80) }
+    packets=flush(client,clientOut,"client",85)
+    for _,p:=range packets { rustDeliver(server,p,86) }
+    flush(server,serverOut,"server",90)
+    rtt:=&RoundTripInfo{rto:100,minRtt:20}
+    var rtos []uint32
+    for i,v:=range []uint32{40,80,20,100,0xffffffff} { rtt.Update(v,uint32(100+i)); rtos=append(rtos,rtt.Timeout()) }
+    fixture:=struct {
+        Source string `json:"source"`
+        Vectors []rustVector `json:"vectors"`
+        Trace []rustTrace `json:"trace"`
+        Payload string `json:"payload"`
+        Received string `json:"received"`
+        RTOs []uint32 `json:"rtos"`
+    }{"Xray-core 67756b3674d56b72c7a7e675e8dcd3f883e1b2f7",vectors,trace,hex.EncodeToString(payload),hex.EncodeToString(result[:n]),rtos}
+    encoded,err:=json.MarshalIndent(fixture,"","  "); if err!=nil { t.Fatal(err) }
+    if err=os.WriteFile(os.Getenv("KCP_REFERENCE_OUTPUT"),append(encoded,'\n'),0600);err!=nil {t.Fatal(err)}
+}
