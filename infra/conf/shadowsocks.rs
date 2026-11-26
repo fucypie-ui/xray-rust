@@ -143,47 +143,47 @@ pub(crate) fn build_2022_inbound(
     // Go gives clients precedence, including when it is an empty array.
     let users: Shadowsocks2022Users = serde_json::from_value(raw.clone())
         .map_err(|error| Error::Config(format!("Invalid SS2022 users/clients: {error}")))?;
-    if let Some(users) = users.clients.or(users.users) {
-        if !users.is_empty() {
-            use crate::proxy::shadowsocks_2022::{
-                cipher::CipherMethod,
-                kdf::parse_key,
-                multi_server::{MultiUserServer, UserAccount},
-                relay_server::{RelayServer, RelayTarget},
-            };
-            use crate::common::protocol::User;
-            let method = CipherMethod::parse(&settings.method)?;
-            if method.is_chacha() {
-                return Err(Error::Config("SS2022 multi-user and relay require AES".into()));
-            }
-            let master = parse_key(&settings.password, method.key_length())?;
-            let relay_mode = users[0].address.is_some();
-            let server = MultiUserServer::new(tag, method, master.clone())?;
-            let mut targets = Vec::new();
-            for (index, raw_user) in users.into_iter().enumerate() {
-                if !raw_user.method.as_deref().unwrap_or_default().is_empty() {
-                    return Err(Error::Config("SS2022 users must have empty method".into()));
-                }
-                let key = parse_key(raw_user.password.as_deref().unwrap_or_default(), method.key_length())?;
-                let prefix = if relay_mode { "unnamed-destination" } else { "unnamed-user" };
-                let email = raw_user.email.filter(|email| !email.is_empty())
-                    .unwrap_or_else(|| format!("{prefix}-{index}-{}", uuid::Uuid::new_v4()));
-                let user = User::with_email(uuid::Uuid::new_v4(), email, u32::from(raw_user.level.unwrap_or_default()));
-                if relay_mode {
-                    let address = raw_user.address.filter(|address| !address.is_empty())
-                        .ok_or_else(|| Error::Config("all SS2022 relay users need an address".into()))?;
-                    let port = raw_user.port.filter(|port| *port != 0)
-                        .ok_or_else(|| Error::Config("SS2022 relay port must be nonzero".into()))?;
-                    targets.push(RelayTarget { key, destination: Destination::tcp(address.parse::<Address>()?, port), user });
-                } else {
-                    server.add_account(UserAccount { key, user })?;
-                }
-            }
-            if relay_mode {
-                return Ok(Some(Arc::new(RelayServer::new(tag, method, master, targets)?)));
-            }
-            return Ok(Some(Arc::new(server)));
+    if let Some(users) = users.clients.or(users.users)
+        && !users.is_empty()
+    {
+        use crate::proxy::shadowsocks_2022::{
+            cipher::CipherMethod,
+            kdf::parse_key,
+            multi_server::{MultiUserServer, UserAccount},
+            relay_server::{RelayServer, RelayTarget},
+        };
+        use crate::common::protocol::User;
+        let method = CipherMethod::parse(&settings.method)?;
+        if method.is_chacha() {
+            return Err(Error::Config("SS2022 multi-user and relay require AES".into()));
         }
+        let master = parse_key(&settings.password, method.key_length())?;
+        let relay_mode = users[0].address.is_some();
+        let server = MultiUserServer::new(tag, method, master.clone())?;
+        let mut targets = Vec::new();
+        for (index, raw_user) in users.into_iter().enumerate() {
+            if !raw_user.method.as_deref().unwrap_or_default().is_empty() {
+                return Err(Error::Config("SS2022 users must have empty method".into()));
+            }
+            let key = parse_key(raw_user.password.as_deref().unwrap_or_default(), method.key_length())?;
+            let prefix = if relay_mode { "unnamed-destination" } else { "unnamed-user" };
+            let email = raw_user.email.filter(|email| !email.is_empty())
+                .unwrap_or_else(|| format!("{prefix}-{index}-{}", uuid::Uuid::new_v4()));
+            let user = User::with_email(uuid::Uuid::new_v4(), email, u32::from(raw_user.level.unwrap_or_default()));
+            if relay_mode {
+                let address = raw_user.address.filter(|address| !address.is_empty())
+                    .ok_or_else(|| Error::Config("all SS2022 relay users need an address".into()))?;
+                let port = raw_user.port.filter(|port| *port != 0)
+                    .ok_or_else(|| Error::Config("SS2022 relay port must be nonzero".into()))?;
+                targets.push(RelayTarget { key, destination: Destination::tcp(address.parse::<Address>()?, port), user });
+            } else {
+                server.add_account(UserAccount { key, user })?;
+            }
+        }
+        if relay_mode {
+            return Ok(Some(Arc::new(RelayServer::new(tag, method, master, targets)?)));
+        }
+        return Ok(Some(Arc::new(server)));
     }
     let user = crate::common::protocol::User::with_email(
         uuid::Uuid::nil(), settings.email.unwrap_or_default(), level,

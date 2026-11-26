@@ -181,7 +181,7 @@ impl tokio::io::AsyncRead for CounterStream {
 impl tokio::io::AsyncWrite for CounterStream {
     fn poll_write(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buffer: &[u8]) -> std::task::Poll<std::io::Result<usize>> {
         let result = self.inner.as_mut().poll_write(cx, buffer);
-        if let std::task::Poll::Ready(Ok(n)) = result { if let Some(counter) = &self.write { counter.add(n as i64); } }
+        if let std::task::Poll::Ready(Ok(n)) = result && let Some(counter) = &self.write { counter.add(n as i64); }
         result
     }
     fn poll_flush(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> { self.inner.as_mut().poll_flush(cx) }

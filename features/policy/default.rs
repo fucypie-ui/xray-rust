@@ -13,7 +13,11 @@ impl Feature for DefaultManager {
 }
 
 impl PolicyManager for DefaultManager {
-    fn for_level(&self, _level: u32) -> SessionPolicy { session_default() }
+    fn for_level(&self, level: u32) -> SessionPolicy {
+        let mut policy = session_default();
+        if level == 1 { policy.timeouts.connection_idle = std::time::Duration::from_secs(600); }
+        policy
+    }
     fn for_system(&self) -> SystemPolicy { SystemPolicy::default() }
 }
 

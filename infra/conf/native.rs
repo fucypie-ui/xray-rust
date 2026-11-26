@@ -101,8 +101,8 @@ pub(crate) fn decode_config(data: &[u8]) -> Result<Config> {
         let stream_settings = stream_config(receiver.get("streamSettings"))?;
         let mut ports = Vec::new();
         for range in array(&receiver["portList"], "range") {
-            let first = range["from"].as_u64().unwrap_or(0);
-            let last = range["to"].as_u64().unwrap_or(first);
+            let first = range["From"].as_u64().unwrap_or(0);
+            let last = range["To"].as_u64().unwrap_or(first);
             if last > u16::MAX as u64 || first > last { return Err(Error::Config("invalid protobuf inbound port range".into())); }
             ports.extend((first..=last).map(|port| port as u16));
         }
@@ -279,8 +279,10 @@ fn proxy_settings(typed: &Value, inbound: bool) -> Result<(String, Value)> {
         "xray.proxy.trojan.ClientConfig" | "xray.proxy.shadowsocks.ClientConfig" | "xray.proxy.hysteria.ClientConfig" => {
             let protocol = if name.contains("trojan") { "trojan" } else if name.contains("hysteria") { "hysteria" } else { "shadowsocks" };
             let mut server = endpoint(&value["server"])?;
-            if let Some(account) = server["users"].as_array().and_then(|users| users.first()).cloned() {
-                if let Some(object) = account.as_object() { for (key,value) in object { server[key] = value.clone(); } }
+            if let Some(account) = server["users"].as_array().and_then(|users| users.first()).cloned()
+                && let Some(object) = account.as_object()
+            {
+                for (key,value) in object { server[key] = value.clone(); }
             }
             (protocol, json!({"servers":[server]}))
         }

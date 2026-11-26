@@ -36,10 +36,10 @@ impl RootRuntime {
             use super::buildable::Buildable;
             crate::app::version::Version::new(version.clone().build()?)?;
         }
-        if let Some(geodata) = &config.geodata {
-            if geodata.get("cron").is_some_and(|value| !value.is_null()) || geodata.get("assets").and_then(serde_json::Value::as_array).is_some_and(|assets| !assets.is_empty()) {
-                return Err(Error::Unsupported("scheduled root geodata updates are not implemented".into()));
-            }
+        if let Some(geodata) = &config.geodata
+            && (geodata.get("cron").is_some_and(|value| !value.is_null()) || geodata.get("assets").and_then(serde_json::Value::as_array).is_some_and(|assets| !assets.is_empty()))
+        {
+            return Err(Error::Unsupported("scheduled root geodata updates are not implemented".into()));
         }
         // Applying os::set_var in a multithreaded Rust process is unsafe.
         // Resolve the supported environment flag within this instance instead.
