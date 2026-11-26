@@ -398,6 +398,35 @@ fn parse_multi_settings(raw: Option<serde_json::Value>, proto: &str) -> Result<M
     Ok(s)
 }
 
+fn build_socks_inbound(tag: &str, raw: Option<serde_json::Value>) -> Result<Arc<dyn InboundHandler>> {
+    let settings: super::socks::SocksServerConfig = serde_json::from_value(
+        raw.filter(|value| !value.is_null()).unwrap_or_else(|| serde_json::json!({})),
+    ).map_err(|error| Error::Config(format!("Invalid SOCKS inbound settings: {}", error)))?;
+    let server = if settings.auth.as_deref() == Some("password") {
+        // An absent/empty account list must remain password-only and reject all
+        // logins, rather than accidentally becoming an unauthenticated proxy.
+        p::socks::Server::with_auth(tag, settings.accounts)
+    } else {
+        p::socks::Server::new(tag)
+    };
+    Ok(Arc::new(server))
+}
+
+fn build_socks_outbound(tag: &str, raw: Option<serde_json::Value>) -> Result<Arc<dyn OutboundHandler>> {
+    let settings: super::socks::SocksClientConfig = serde_json::from_value(
+        raw.filter(|value| !value.is_null()).unwrap_or_else(|| serde_json::json!({})),
+    ).map_err(|error| Error::Config(format!("Invalid SOCKS outbound settings: {}", error)))?;
+    let server = settings.into_server()?;
+    let address = server.address.as_deref()
+        .ok_or_else(|| Error::Config("SOCKS server address is required".into()))?;
+    let destination = Destination::from_str(&format!("{}:{}", address, server.port))?;
+    let client = match server.users.as_deref().and_then(|users| users.first()) {
+        Some(account) => p::socks::Client::with_auth(tag, destination, &account.username, &account.password),
+        None => p::socks::Client::new(tag, destination),
+    };
+    Ok(Arc::new(client))
+}
+
 fn sub_tag_for(tag: &str, len: usize, idx: usize) -> String {
     if len == 1 { tag.to_string() } else { format!("{}#{}", tag, idx) }
 }
@@ -564,20 +593,7 @@ impl Config {
                     }
                     wrap_pingora_multi_outbound(&tag, hs, lbs)?
                 }
-                "socks" => {
-                    let s = parse_multi_settings(out_cfg.settings, "SOCKS")?;
-                    if s.servers.is_empty() { return Err(Error::Config("SOCKS servers list is empty".into())); }
-                    let (mut hs, mut lbs) = (Vec::with_capacity(s.servers.len()), Vec::with_capacity(s.servers.len()));
-                    for (idx, srv) in s.servers.iter().enumerate() {
-                        let addr = srv.address.as_deref().unwrap_or("127.0.0.1");
-                        let port = srv.port.unwrap_or(1080);
-                        let dest = Destination::from_str(&format!("{}:{}", addr, port))?;
-                        let sub = sub_tag_for(&tag, s.servers.len(), idx);
-                        lbs.push(format!("{}:{}", addr, port));
-                        hs.push(Arc::new(p::socks::Client::new(&sub, dest)) as Arc<dyn OutboundHandler>);
-                    }
-                    wrap_pingora_multi_outbound(&tag, hs, lbs)?
-                }
+                "socks" => build_socks_outbound(&tag, out_cfg.settings)?,
                 "http" => {
                     let s = parse_multi_settings(out_cfg.settings, "HTTP")?;
                     if s.servers.is_empty() { return Err(Error::Config("HTTP servers list is empty".into())); }
@@ -672,7 +688,7 @@ impl Config {
                 .parse()
                 .map_err(|e| Error::Config(format!("Invalid listen address '{}:{}': {}", listen_ip, port_val, e)))?;
             let handler: Arc<dyn InboundHandler> = match proto.as_str() {
-                "socks" | "socks5" => Arc::new(p::socks::Server::new(&tag)),
+                "socks" | "socks5" => build_socks_inbound(&tag, in_cfg.settings)?,
                 "http" => Arc::new(p::http::Server::new(&tag)),
                 "mixed" => Arc::new(p::mixed::Server::new(&tag)),
                 "vless" => {
@@ -1119,3 +1135,386 @@ fn build_dns_client(dns_val: Option<&serde_json::Value>) -> crate::app::dns::Dns
     client
 }
 
+#[cfg(test)]
+mod socks_runtime_config_tests {
+    use super::{BuiltConfig, Config};
+    use crate::common::errors::{Error, Result};
+    use crate::common::net::{Address, Destination};
+    use crate::common::protocol::SessionContext;
+    use serde_json::{Value, json};
+    use std::net::{Ipv4Addr, SocketAddr};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::time::timeout;
+
+    fn build_config(value: Value) -> Result<BuiltConfig> {
+        serde_json::from_value::<Config>(value).unwrap().build()
+    }
+
+    fn password_request(username: &str, password: &str) -> Vec<u8> {
+        let mut wire = vec![5, 1, 2, 1, username.len() as u8];
+        wire.extend_from_slice(username.as_bytes());
+        wire.push(password.len() as u8);
+        wire.extend_from_slice(password.as_bytes());
+        wire.extend_from_slice(b"\x05\x01\x00\x03\x0bexample.com\x01\xbbping");
+        wire
+    }
+
+    async fn inbound_exchange(settings: Value, wire: &[u8]) -> (Result<SessionContext>, Vec<u8>, Vec<u8>) {
+        timeout(Duration::from_secs(5), async {
+            let mut built = build_config(json!({
+                "inbounds": [{
+                    "tag": "configured-socks", "protocol": "socks5",
+                    "listen": "127.0.0.1", "port": 1080, "settings": settings
+                }]
+            })).unwrap();
+            let (address, handler) = built.inbounds.pop().unwrap();
+            assert_eq!(address, "127.0.0.1:1080".parse::<SocketAddr>().unwrap());
+            assert_eq!(handler.tag(), "configured-socks");
+            let (mut client, stream) = tokio::io::duplex(4096);
+            client.write_all(wire).await.unwrap();
+            client.shutdown().await.unwrap();
+            let remote = "127.0.0.1:54321".parse().unwrap();
+            let mut payload = Vec::new();
+            let result = match handler.handle_connection(Box::pin(stream), remote).await {
+                Ok(mut inbound) => {
+                    inbound.stream.read_to_end(&mut payload).await.unwrap();
+                    Ok(inbound.session)
+                }
+                Err(error) => Err(error),
+            };
+            let mut reply = Vec::new();
+            client.read_to_end(&mut reply).await.unwrap();
+            (result, reply, payload)
+        }).await.unwrap()
+    }
+
+    // Exercise the outbound returned by Config::build against a scripted TCP
+    // peer, so client/server implementation mistakes cannot mask each other.
+    async fn outbound_wire_case(listener: TcpListener, settings: Value, account: Option<(&str, &str)>) {
+        timeout(Duration::from_secs(5), async {
+            let credentials = account.map(|(username, password)| {
+                let mut bytes = vec![1, username.len() as u8];
+                bytes.extend_from_slice(username.as_bytes());
+                bytes.push(password.len() as u8);
+                bytes.extend_from_slice(password.as_bytes());
+                bytes
+            });
+            let mut built = build_config(json!({
+                "outbounds": [{"tag": "configured-socks", "protocol": "socks", "settings": settings}]
+            })).unwrap();
+            let outbound = built.outbounds.remove("configured-socks").unwrap();
+            assert_eq!(outbound.tag(), "configured-socks");
+            let peer = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let method = if credentials.is_some() { 2 } else { 0 };
+                let mut greeting = [0; 3];
+                stream.read_exact(&mut greeting).await.unwrap();
+                assert_eq!(greeting, [5, 1, method]);
+                stream.write_all(&[5, method]).await.unwrap();
+                if let Some(expected) = credentials {
+                    let mut actual = vec![0; expected.len()];
+                    stream.read_exact(&mut actual).await.unwrap();
+                    assert_eq!(actual, expected);
+                    stream.write_all(&[1, 0]).await.unwrap();
+                }
+                let mut request = [0; 10];
+                stream.read_exact(&mut request).await.unwrap();
+                assert_eq!(request, [5, 1, 0, 1, 1, 2, 3, 4, 1, 187]);
+                stream.write_all(b"\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00pong").await.unwrap();
+                let mut payload = [0; 4];
+                stream.read_exact(&mut payload).await.unwrap();
+                assert_eq!(&payload, b"ping");
+            });
+            let target = Destination::tcp(Address::Ipv4(Ipv4Addr::new(1, 2, 3, 4)), 443);
+            let mut tunnel = outbound.connect(&SessionContext::new("test", target)).await.unwrap();
+            let mut payload = [0; 4];
+            tunnel.read_exact(&mut payload).await.unwrap();
+            assert_eq!(&payload, b"pong");
+            tunnel.write_all(b"ping").await.unwrap();
+            tunnel.flush().await.unwrap();
+            peer.await.unwrap();
+        }).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn built_socks_inbound_uses_go_account_list_for_password_handshake() {
+        // Xray-core/infra/conf/socks_test.go TestSocksInboundConfig credentials.
+        let settings = json!({
+            "auth": "password",
+            "accounts": [{"user": "my-username", "pass": "my-password"}],
+            "udp": false, "ip": "127.0.0.1", "userLevel": 1
+        });
+        let (result, reply, payload) = inbound_exchange(settings, &password_request("my-username", "my-password")).await;
+        let session = result.unwrap();
+        assert_eq!(session.destination, Destination::from_domain_port("example.com", 443));
+        assert_eq!(session.user.unwrap().email, "my-username");
+        assert_eq!(session.source, Some("127.0.0.1:54321".parse::<SocketAddr>().unwrap()));
+        assert_eq!(reply, [5, 2, 1, 0, 5, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(payload, b"ping");
+    }
+
+    #[tokio::test]
+    async fn built_socks_inbound_rejects_bad_credentials_and_auth_downgrade() {
+        let settings = json!({"auth": "password", "accounts": [{"user": "a", "pass": "bc"}]});
+        for (username, password) in [("a", "wrong"), ("wrong", "bc")] {
+            let (result, reply, _) = inbound_exchange(settings.clone(), &password_request(username, password)).await;
+            assert!(result.is_err());
+            assert_eq!(reply, [5, 2, 1, 255]);
+        }
+        let (result, reply, _) = inbound_exchange(settings.clone(), &[5, 1, 0]).await;
+        assert!(result.is_err());
+        assert_eq!(reply, [5, 255]);
+        let (result, reply, _) = inbound_exchange(settings, &[4, 1]).await;
+        assert!(result.is_err());
+        assert_eq!(reply, [0, 91, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[tokio::test]
+    async fn built_socks_password_mode_without_accounts_rejects_all_logins() {
+        // Go's Build succeeds here; ServerConfig.HasAccount returns false.
+        for settings in [
+            json!({"auth": "password"}),
+            json!({"auth": "password", "accounts": []}),
+            json!({"auth": "password", "accounts": null}),
+            json!({"auth": "password", "users": []}),
+        ] {
+            let (result, reply, _) = inbound_exchange(settings.clone(), &password_request("a", "bc")).await;
+            assert!(result.is_err());
+            assert_eq!(reply, [5, 2, 1, 255]);
+            let (result, reply, _) = inbound_exchange(settings, &[5, 1, 0]).await;
+            assert!(result.is_err());
+            assert_eq!(reply, [5, 255]);
+        }
+    }
+
+    #[tokio::test]
+    async fn built_socks_accounts_override_users_including_empty_lists() {
+        for accounts in [None, Some(Value::Null)] {
+            let mut settings = json!({"auth": "password", "users": [{"user": "legacy", "pass": "pass"}]});
+            if let Some(accounts) = accounts { settings["accounts"] = accounts; }
+            let (result, reply, _) = inbound_exchange(settings, &password_request("legacy", "pass")).await;
+            assert!(result.is_ok());
+            assert_eq!(&reply[..4], &[5, 2, 1, 0]);
+        }
+        for accounts in [json!([]), json!([{"user": "primary", "pass": "pass"}])] {
+            let settings = json!({
+                "auth": "password", "accounts": accounts,
+                "users": [{"user": "legacy", "pass": "pass"}]
+            });
+            let (result, reply, _) = inbound_exchange(settings, &password_request("legacy", "pass")).await;
+            assert!(result.is_err());
+            assert_eq!(reply, [5, 2, 1, 255]);
+        }
+        let settings = json!({
+            "auth": "password", "accounts": [{"user": "primary", "pass": "pass"}],
+            "users": [{"user": "legacy", "pass": "pass"}]
+        });
+        let (result, reply, _) = inbound_exchange(settings, &password_request("primary", "pass")).await;
+        assert_eq!(result.unwrap().user.unwrap().email, "primary");
+        assert_eq!(&reply[..4], &[5, 2, 1, 0]);
+    }
+
+    #[tokio::test]
+    async fn built_socks_account_map_uses_last_duplicate_and_accepts_legacy_rust_maps() {
+        for accounts in [
+            json!([{"user": "a", "pass": "old"}, {"user": "a", "pass": "new"}]),
+            json!({"a": "new"}),
+        ] {
+            let settings = json!({"auth": "password", "accounts": accounts});
+            let (result, reply, _) = inbound_exchange(settings.clone(), &password_request("a", "new")).await;
+            assert!(result.is_ok());
+            assert_eq!(&reply[..4], &[5, 2, 1, 0]);
+            let (result, reply, _) = inbound_exchange(settings, &password_request("a", "old")).await;
+            assert!(result.is_err());
+            assert_eq!(reply, [5, 2, 1, 255]);
+        }
+    }
+
+    #[tokio::test]
+    async fn built_socks_empty_configured_account_remains_password_auth() {
+        let (result, reply, _) = inbound_exchange(
+            json!({"auth": "password", "accounts": [{}]}), &password_request("", ""),
+        ).await;
+        assert!(result.is_ok());
+        assert_eq!(&reply[..4], &[5, 2, 1, 0]);
+    }
+
+    #[tokio::test]
+    async fn built_socks_missing_or_unknown_auth_defaults_to_noauth_like_go() {
+        for settings in [
+            Value::Null,
+            json!({}),
+            json!({"auth": "noauth"}),
+            json!({"auth": "PASSWORD", "accounts": [{"user": "a", "pass": "bc"}]}),
+            json!({"auth": "unknown"}),
+        ] {
+            let wire = b"\x05\x01\x00\x05\x01\x00\x01\x7f\x00\x00\x01\x00\x50data";
+            let (result, reply, payload) = inbound_exchange(settings.clone(), wire).await;
+            assert_eq!(result.unwrap().destination, Destination::tcp(Address::Ipv4(Ipv4Addr::LOCALHOST), 80));
+            assert_eq!(reply, [5, 0, 5, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
+            assert_eq!(payload, b"data");
+            let (result, reply, _) = inbound_exchange(settings, &[5, 1, 2]).await;
+            assert!(result.is_err());
+            assert_eq!(reply, [5, 255]);
+        }
+    }
+
+    #[test]
+    fn built_socks_inbound_rejects_malformed_account_settings() {
+        for settings in [
+            json!({"auth": "password", "accounts": "not-accounts"}),
+            json!({"auth": "password", "accounts": [{"user": "a", "pass": 123}]}),
+            json!({"auth": "password", "users": {"a": "bc"}}),
+            json!({"auth": true}),
+        ] {
+            let result = build_config(json!({
+                "inbounds": [{"protocol": "socks", "port": 1080, "settings": settings}]
+            }));
+            assert!(matches!(result, Err(Error::Config(_))));
+        }
+    }
+
+    #[tokio::test]
+    async fn built_socks_outbound_emits_go_user_pass_vectors_without_uuid_ids() {
+        // Both shapes are Go TestSocksOutboundConfig vectors. The flat form
+        // overrides servers, even if that list would otherwise fail validation.
+        for flat in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let settings = if flat {
+                json!({
+                    "address": "127.0.0.1", "port": port,
+                    "user": "test user", "pass": "test pass", "email": "test@email.com",
+                    "servers": [{}, {}]
+                })
+            } else {
+                json!({"servers": [{
+                    "address": "127.0.0.1", "port": port,
+                    "users": [{"user": "test user", "pass": "test pass", "email": "test@email.com", "level": 1}]
+                }]})
+            };
+            outbound_wire_case(listener, settings, Some(("test user", "test pass"))).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn built_socks_outbound_omitted_users_and_flat_empty_username_use_noauth() {
+        for mode in 0..5 {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let settings = match mode {
+                0 => json!({"servers": [{"address": "127.0.0.1", "port": port}]}),
+                1 => json!({"servers": [{"address": "127.0.0.1", "port": port, "users": []}]}),
+                2 => json!({"servers": [{"address": "127.0.0.1", "port": port, "users": null}]}),
+                3 => json!({"address": "127.0.0.1", "port": port, "pass": "ignored"}),
+                _ => json!({"address": "127.0.0.1", "port": port, "user": "", "pass": "ignored"}),
+            };
+            outbound_wire_case(listener, settings, None).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn built_socks_outbound_explicit_empty_account_still_uses_password_auth() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let settings = json!({"servers": [{"address": "127.0.0.1", "port": port, "users": [{}]}]});
+        outbound_wire_case(listener, settings, Some(("", ""))).await;
+    }
+
+    #[test]
+    fn built_socks_outbound_enforces_go_server_and_user_cardinality() {
+        for settings in [
+            Value::Null,
+            json!({}),
+            json!({"servers": []}),
+            json!({"servers": null}),
+            json!({"servers": [{"address": "127.0.0.1"}, {"address": "127.0.0.2"}]}),
+            json!({"servers": [{"address": "127.0.0.1", "users": [{"user": "a"}, {"user": "b"}]}]}),
+            json!({"servers": [{"port": 1080}]}),
+            json!({"servers": [{"address": "127.0.0.1", "port": 70000}]}),
+        ] {
+            let result = build_config(json!({
+                "outbounds": [{"protocol": "socks", "settings": settings}]
+            }));
+            assert!(matches!(result, Err(Error::Config(_))));
+        }
+    }
+
+    #[tokio::test]
+    async fn built_socks_outbound_and_inbound_authenticate_and_exchange_payload() {
+        timeout(Duration::from_secs(5), async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let mut built = build_config(json!({
+                "inbounds": [{
+                    "tag": "socks-in", "protocol": "socks", "listen": "127.0.0.1", "port": port,
+                    "settings": {"auth": "password", "accounts": [{"user": "a", "pass": "bc"}]}
+                }],
+                "outbounds": [{
+                    "tag": "socks-out", "protocol": "socks",
+                    "settings": {"servers": [{"address": "127.0.0.1", "port": port, "users": [{"user": "a", "pass": "bc"}]}]}
+                }]
+            })).unwrap();
+            let (address, inbound) = built.inbounds.pop().unwrap();
+            assert_eq!(address, listener.local_addr().unwrap());
+            let outbound = built.outbounds.remove("socks-out").unwrap();
+            let target = Destination::from_domain_port("example.com", 443);
+            let expected_target = target.clone();
+            let peer = tokio::spawn(async move {
+                let (stream, remote) = listener.accept().await.unwrap();
+                let mut result = inbound.handle_connection(Box::pin(stream), remote).await.unwrap();
+                assert_eq!(result.session.destination, expected_target);
+                assert_eq!(result.session.user.unwrap().email, "a");
+                let mut payload = [0; 4];
+                result.stream.read_exact(&mut payload).await.unwrap();
+                assert_eq!(&payload, b"ping");
+                result.stream.write_all(b"pong").await.unwrap();
+            });
+            let mut stream = outbound.connect(&SessionContext::new("test", target)).await.unwrap();
+            stream.write_all(b"ping").await.unwrap();
+            stream.flush().await.unwrap();
+            let mut payload = [0; 4];
+            stream.read_exact(&mut payload).await.unwrap();
+            assert_eq!(&payload, b"pong");
+            peer.await.unwrap();
+        }).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn built_socks_outbound_cannot_bypass_bad_credentials_or_missing_inbound_accounts() {
+        timeout(Duration::from_secs(10), async {
+            for mode in 0..3 {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let port = listener.local_addr().unwrap().port();
+                let settings = if mode == 1 {
+                    json!({"auth": "password"})
+                } else {
+                    json!({"auth": "password", "accounts": [{"user": "a", "pass": "bc"}]})
+                };
+                let users = match mode {
+                    0 => json!([{"user": "a", "pass": "wrong"}]),
+                    1 => json!([{"user": "a", "pass": "bc"}]),
+                    _ => json!([]),
+                };
+                let mut built = build_config(json!({
+                    "inbounds": [{"protocol": "socks", "port": port, "settings": settings}],
+                    "outbounds": [{
+                        "tag": "socks-out", "protocol": "socks",
+                        "settings": {"servers": [{"address": "127.0.0.1", "port": port, "users": users}]}
+                    }]
+                })).unwrap();
+                let inbound = built.inbounds.pop().unwrap().1;
+                let outbound = built.outbounds.remove("socks-out").unwrap();
+                let peer = tokio::spawn(async move {
+                    let (stream, remote) = listener.accept().await.unwrap();
+                    assert!(inbound.handle_connection(Box::pin(stream), remote).await.is_err());
+                });
+                let target = Destination::from_domain_port("example.com", 443);
+                assert!(outbound.connect(&SessionContext::new("test", target)).await.is_err());
+                peer.await.unwrap();
+            }
+        }).await.unwrap();
+    }
+}

@@ -210,12 +210,15 @@ impl DnsClient {
         Some((filtered, ttl))
     }
     fn get_cached(&self, clean: &str, option: &IPOption) -> Option<Vec<IpAddr>> {
+        self.get_cached_with_ttl(clean, option).map(|(ips, _)| ips)
+    }
+    fn get_cached_with_ttl(&self, clean: &str, option: &IPOption) -> Option<(Vec<IpAddr>, u32)> {
         if self.disable_cache { return None; }
         let (v4, v6) = Self::resolve_ip_flags(self.query_strategy, option);
         if !v4 && !v6 { return None; }
         self.cache
-            .get(&Self::cache_key(clean, v4, v6))
-            .or_else(|| self.cache.get(&Self::cache_key(clean, true, true)))
+            .get_with_ttl(&Self::cache_key(clean, v4, v6))
+            .or_else(|| self.cache.get_with_ttl(&Self::cache_key(clean, true, true)))
     }
     pub fn lookup_cached_or_hosts(&self, domain: &str) -> Vec<IpAddr> {
         let (clean, opt) = (domain.trim_end_matches('.'), IPOption::default());
@@ -269,9 +272,9 @@ impl DnsClient {
                 Err(Error::NotFound(format!("Static host '{}' has no IP matching strategy", domain)))
             };
         }
-        if let Some(ips) = self.get_cached(clean, &option) {
+        if let Some((ips, ttl)) = self.get_cached_with_ttl(clean, &option) {
             let filtered = self.filter_ips(&ips, &option);
-            if !filtered.is_empty() { return Ok((filtered, 60)); }
+            if !filtered.is_empty() { return Ok((filtered, ttl)); }
         }
         let mut tried = vec![false; self.entries.len()];
         let mut any_domain_matched = false;

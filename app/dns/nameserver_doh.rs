@@ -9,7 +9,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use crate::app::dns::hosts::StaticHosts;
-use crate::app::dns::nameserver::{NameServer, build_dns_query_with_ecs, parse_dns_response_with_ttl};
+use crate::app::dns::nameserver::{NameServer, parse_dns_response_for_query, query_ip_families, try_build_dns_query_with_ecs};
 use crate::app::router::Router;
 use crate::common::errors::{Error, Result};
 use crate::common::net::{Address, BoxStream, Destination};
@@ -214,17 +214,23 @@ impl DohNameServer {
         Ok(out)
     }
     async fn execute_doh(&self, domain: &str, qtype: u16) -> Result<(Vec<IpAddr>, u32)> {
+        tokio::time::timeout(self.timeout, self.execute_doh_inner(domain, qtype))
+            .await.map_err(|_| Error::Timeout)?
+    }
+    async fn execute_doh_inner(&self, domain: &str, qtype: u16) -> Result<(Vec<IpAddr>, u32)> {
         let (is_https, host, port, path) = self.parse_url();
         let clean = domain.trim_end_matches('.');
         if clean.eq_ignore_ascii_case(&host) {
             return Err(Error::Protocol(format!("DoH server '{}' tries to resolve itself", self.url)));
         }
-        let query = build_dns_query_with_ecs(clean, qtype, self.client_ip);
+        let mut query = try_build_dns_query_with_ecs(domain, qtype, self.client_ip)?;
+        // Go DoHNameServer.newReqID always returns zero (RFC 8484 section 4.1).
+        query[..2].copy_from_slice(&[0, 0]);
         if is_https {
             for attempt in 0..2 {
                 let send_req = self.get_or_connect_h2(&host, port).await?;
                 match self.send_h2_query(send_req, &host, port, &path, &query).await {
-                    Ok(body) => return parse_dns_response_with_ttl(&body, clean),
+                    Ok(body) => return parse_dns_response_for_query(&body, &query),
                     Err(e) if attempt == 0 => {
                         *self.h2_client.lock().await = None;
                         tracing::debug!("DoH H2 query failed for '{}' on attempt 0 ({}), retrying on fresh H2 conn", clean, e);
@@ -286,9 +292,9 @@ impl DohNameServer {
         if header_len == 0 || buf.len() <= header_len {
             return Err(Error::Protocol("Invalid or empty DoH response".into()));
         }
-        if let Some(body) = decoded_chunked { return parse_dns_response_with_ttl(&body, clean); }
+        if let Some(body) = decoded_chunked { return parse_dns_response_for_query(&body, &query); }
         let end = content_len.map_or(buf.len(), |clen| (header_len + clen).min(buf.len()));
-        parse_dns_response_with_ttl(&buf[header_len..end], clean)
+        parse_dns_response_for_query(&buf[header_len..end], &query)
     }
 }
 
@@ -323,29 +329,6 @@ impl NameServer for DohNameServer {
         self.query_ip_with_opt(domain, true, false).await.map(|(ips, _)| ips)
     }
     async fn query_ip_with_opt(&self, domain: &str, ipv4: bool, ipv6: bool) -> Result<(Vec<IpAddr>, u32)> {
-        let (mut ips, mut ttl, mut last_err) = (Vec::new(), u32::MAX, None);
-        if ipv4 {
-            match self.execute_doh(domain, 1).await {
-                Ok((v, t)) => { ips.extend(v); ttl = ttl.min(t); }
-                Err(e) => {
-                    tracing::warn!("DoH A query failed for '{}' via '{}': {}", domain, self.url, e);
-                    last_err = Some(e);
-                }
-            }
-        }
-        if ipv6 {
-            match self.execute_doh(domain, 28).await {
-                Ok((v, t)) => { ips.extend(v); ttl = ttl.min(t); }
-                Err(e) => {
-                    tracing::warn!("DoH AAAA query failed for '{}' via '{}': {}", domain, self.url, e);
-                    last_err = Some(e);
-                }
-            }
-        }
-        if !ips.is_empty() {
-            Ok((ips, if ttl == u32::MAX { 60 } else { ttl }))
-        } else {
-            Err(last_err.unwrap_or_else(|| Error::NotFound(format!("DoH returned no IP for {}", domain))))
-        }
+        query_ip_families(domain, ipv4, ipv6, |qtype| self.execute_doh(domain, qtype)).await
     }
 }

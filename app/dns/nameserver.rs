@@ -1,12 +1,13 @@
 use crate::app::dns::fakedns::FakeDnsHolder;
 use crate::common::errors::{Error, Result};
 use async_trait::async_trait;
+use hickory_proto::op::{Header, Message, MessageType, OpCode, Query, ResponseCode};
+use hickory_proto::rr::{DNSClass, Name, RecordType};
+use hickory_proto::serialize::binary::{BinDecodable, BinDecoder};
+use std::future::Future;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-#[allow(unused_imports)]
-use tokio::net::{TcpStream, UdpSocket};
+use std::time::{Duration, Instant};
 
 #[async_trait]
 pub trait NameServer: Send + Sync {
@@ -21,23 +22,20 @@ pub trait NameServer: Send + Sync {
 
 pub struct UdpNameServer {
     name: String,
-    server_addr: SocketAddr,
-    timeout: Duration,
+    inner: super::nameserver_udp::UdpNameServer,
 }
 
 impl UdpNameServer {
     pub fn new(server_addr: SocketAddr) -> Self {
         Self {
             name: format!("udp://{}", server_addr),
-            server_addr,
-            timeout: Duration::from_secs(5),
+            inner: super::nameserver_udp::UdpNameServer::new(server_addr),
         }
     }
     pub fn with_timeout(server_addr: SocketAddr, timeout: Duration) -> Self {
         Self {
             name: format!("udp://{}", server_addr),
-            server_addr,
-            timeout,
+            inner: super::nameserver_udp::UdpNameServer::with_timeout(server_addr, timeout),
         }
     }
 }
@@ -46,33 +44,23 @@ impl UdpNameServer {
 impl NameServer for UdpNameServer {
     fn name(&self) -> &str { &self.name }
     async fn query_ip(&self, domain: &str) -> Result<Vec<IpAddr>> {
-        #[cfg(target_os = "windows")]
-        let socket = {
-            let iface = crate::proxy::tun::DEFAULT_OUTBOUND_INTERFACE.read().await;
-            crate::proxy::tun::socket_helpers::new_udp_socket(None, iface.as_ref(), Some(self.server_addr)).await.map_err(Error::Io)?
-        };
-        #[cfg(not(target_os = "windows"))]
-        let socket = UdpSocket::bind("0.0.0.0:0").await?;
-        socket.connect(self.server_addr).await?;
-        socket.send(&build_dns_query(domain)).await?;
-        let mut resp = [0u8; 1024];
-        let n = pingora_timeout::timeout(self.timeout, socket.recv(&mut resp)).await.map_err(|_| Error::Timeout)?.map_err(Error::Io)?;
-        parse_dns_response(&resp[..n], domain)
+        self.inner.query_ip(domain).await
+    }
+    async fn query_ip_with_opt(&self, domain: &str, ipv4: bool, ipv6: bool) -> Result<(Vec<IpAddr>, u32)> {
+        self.inner.query_ip_with_opt(domain, ipv4, ipv6).await
     }
 }
 
 pub struct TcpNameServer {
     name: String,
-    server_addr: SocketAddr,
-    timeout: Duration,
+    inner: super::nameserver_tcp::TcpNameServer,
 }
 
 impl TcpNameServer {
     pub fn new(server_addr: SocketAddr) -> Self {
         Self {
             name: format!("tcp://{}", server_addr),
-            server_addr,
-            timeout: Duration::from_secs(5),
+            inner: super::nameserver_tcp::TcpNameServer::new(server_addr),
         }
     }
 }
@@ -81,18 +69,10 @@ impl TcpNameServer {
 impl NameServer for TcpNameServer {
     fn name(&self) -> &str { &self.name }
     async fn query_ip(&self, domain: &str) -> Result<Vec<IpAddr>> {
-        let mut stream = pingora_timeout::timeout(
-            self.timeout,
-            crate::app::pingora_bridge::PingoraCoreConnector::dial_tcp(self.server_addr),
-        ).await.map_err(|_| Error::Timeout)??;
-        let query = build_dns_query(domain);
-        stream.write_all(&(query.len() as u16).to_be_bytes()).await?;
-        stream.write_all(&query).await?;
-        let mut len_buf = [0u8; 2];
-        pingora_timeout::timeout(self.timeout, stream.read_exact(&mut len_buf)).await.map_err(|_| Error::Timeout)?.map_err(Error::Io)?;
-        let mut resp = vec![0u8; u16::from_be_bytes(len_buf) as usize];
-        pingora_timeout::timeout(self.timeout, stream.read_exact(&mut resp)).await.map_err(|_| Error::Timeout)?.map_err(Error::Io)?;
-        parse_dns_response(&resp, domain)
+        self.inner.query_ip(domain).await
+    }
+    async fn query_ip_with_opt(&self, domain: &str, ipv4: bool, ipv6: bool) -> Result<(Vec<IpAddr>, u32)> {
+        self.inner.query_ip_with_opt(domain, ipv4, ipv6).await
     }
 }
 
@@ -151,35 +131,37 @@ pub fn build_dns_query(domain: &str) -> Vec<u8> { build_dns_query_typed(domain, 
 pub fn build_dns_query_typed(domain: &str, qtype: u16) -> Vec<u8> { build_dns_query_with_ecs(domain, qtype, None) }
 
 pub fn build_dns_query_with_ecs(domain: &str, qtype: u16, client_ip: Option<IpAddr>) -> Vec<u8> {
-    let txid: [u8; 2] = rand::random();
-    let mut query = vec![
-        txid[0], txid[1], 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, u8::from(client_ip.is_some()),
-    ];
-    for part in domain.trim_end_matches('.').split('.').filter(|p| !p.is_empty()) {
-        query.push(part.len() as u8);
-        query.extend_from_slice(part.as_bytes());
-    }
-    query.push(0x00);
-    query.extend_from_slice(&qtype.to_be_bytes());
-    query.extend_from_slice(&[0x00, 0x01]);
+    // Preserve the existing Vec-returning helper; transports use the checked API.
+    try_build_dns_query_with_ecs(domain, qtype, client_ip).unwrap_or_default()
+}
+
+pub(super) fn try_build_dns_query_with_ecs(domain: &str, qtype: u16, client_ip: Option<IpAddr>) -> Result<Vec<u8>> {
+    let name = Name::from_ascii(super::dnscommon::fqdn(domain))
+        .map_err(|e| Error::Protocol(format!("Invalid DNS name: {e}")))?;
+    let mut message = Message::query();
+    message.metadata.id = rand::random();
+    message.metadata.recursion_desired = true;
+    message.add_query(Query::query(name, RecordType::from(qtype)));
+    let mut query = message.to_vec().map_err(|e| Error::Protocol(format!("Failed to encode DNS query: {e}")))?;
     if let Some(ip) = client_ip {
+        query[10..12].copy_from_slice(&1u16.to_be_bytes());
         match ip {
             IpAddr::V4(v4) => {
                 let o = v4.octets();
                 query.extend_from_slice(&[
-                    0, 0, 0x29, 0x10, 0, 0, 0, 0, 0, 0, 0x0B, 0, 8, 0, 7, 0, 1, 24, 0, o[0], o[1], o[2],
+                    0, 0, 0x29, 0x05, 0x46, 0, 0, 0x80, 0, 0, 0x0B, 0, 8, 0, 7, 0, 1, 24, 0, o[0], o[1], o[2],
                 ]);
             }
             IpAddr::V6(v6) => {
                 let o = v6.octets();
                 query.extend_from_slice(&[
-                    0, 0, 0x29, 0x10, 0, 0, 0, 0, 0, 0, 0x14, 0, 8, 0, 0x10, 0, 2, 96, 0,
+                    0, 0, 0x29, 0x05, 0x46, 0, 0, 0x80, 0, 0, 0x14, 0, 8, 0, 0x10, 0, 2, 96, 0,
                     o[0], o[1], o[2], o[3], o[4], o[5], o[6], o[7], o[8], o[9], o[10], o[11],
                 ]);
             }
         }
     }
-    query
+    Ok(query)
 }
 
 pub fn parse_dns_response(resp: &[u8], domain: &str) -> Result<Vec<IpAddr>> {
@@ -187,62 +169,105 @@ pub fn parse_dns_response(resp: &[u8], domain: &str) -> Result<Vec<IpAddr>> {
 }
 
 pub fn parse_dns_response_with_ttl(resp: &[u8], domain: &str) -> Result<(Vec<IpAddr>, u32)> {
-    let n = resp.len();
-    if n < 12 { return Err(Error::Protocol("DNS response too short (< 12 bytes)".into())); }
-    let rcode = resp[3] & 0x0F;
-    if rcode != 0 {
-        return Err(Error::NotFound(format!("DNS server returned error code {} for domain {}", rcode, domain)));
+    let message = decode_dns_response(resp)?;
+    let name = Name::from_ascii(super::dnscommon::fqdn(domain))
+        .map_err(|e| Error::Protocol(format!("Invalid DNS name: {e}")))?;
+    if message.queries.len() != 1 || message.queries[0].name != name
+        || message.queries[0].query_class != DNSClass::IN
+    {
+        return Err(Error::Protocol("DNS response question does not match request".into()));
     }
-    let qdcount = u16::from_be_bytes([resp[4], resp[5]]) as usize;
-    let ancount = u16::from_be_bytes([resp[6], resp[7]]) as usize;
-    let skip_name = |pos: &mut usize| {
-        while *pos < n {
-            let len = resp[*pos] as usize;
-            if len == 0 {
-                *pos += 1;
-                return;
-            }
-            if len & 0xc0 == 0xc0 {
-                *pos += 2;
-                return;
-            }
-            *pos += 1 + len;
-        }
-    };
-    let mut pos = 12;
-    for _ in 0..qdcount {
-        skip_name(&mut pos);
-        pos += 4;
+    response_ips(message, None)
+}
+
+fn decode_dns_response(resp: &[u8]) -> Result<Message> {
+    let message = Message::from_vec(resp)
+        .map_err(|e| Error::Protocol(format!("Malformed DNS response: {e}")))?;
+    if message.metadata.message_type != MessageType::Response || message.metadata.op_code != OpCode::Query {
+        return Err(Error::Protocol("Invalid DNS response flags or opcode".into()));
     }
-    if pos > n { return Err(Error::Protocol("Malformed DNS response questions".into())); }
-    let (mut ips, mut min_ttl) = (Vec::new(), u32::MAX);
-    for _ in 0..ancount {
-        if pos >= n { break; }
-        skip_name(&mut pos);
-        if pos + 10 > n { break; }
-        let rtype = u16::from_be_bytes([resp[pos], resp[pos + 1]]);
-        let ttl = u32::from_be_bytes([resp[pos + 4], resp[pos + 5], resp[pos + 6], resp[pos + 7]]);
-        let rdlength = u16::from_be_bytes([resp[pos + 8], resp[pos + 9]]) as usize;
-        pos += 10;
-        if pos + rdlength > n { break; }
-        match (rtype, rdlength) {
-            (1, 4) => {
-                let b: [u8; 4] = resp[pos..pos + 4].try_into().unwrap();
-                ips.push(IpAddr::V4(std::net::Ipv4Addr::from(b)));
-                min_ttl = min_ttl.min(ttl);
+    if message.metadata.truncation {
+        return Err(Error::Protocol("Truncated DNS response".into()));
+    }
+    Ok(message)
+}
+
+// Inspect only the header/question: TC responses may end inside an answer.
+pub(super) fn response_matches_query(resp: &[u8], query: &[u8]) -> bool {
+    let Ok(request) = Message::from_vec(query) else { return false; };
+    let mut decoder = BinDecoder::new(resp);
+    let Ok(header) = Header::read(&mut decoder) else { return false; };
+    if header.metadata.id != request.metadata.id
+        || header.metadata.message_type != MessageType::Response
+        || header.metadata.op_code != OpCode::Query || header.counts.queries != 1
+        || request.queries.len() != 1
+    { return false; }
+    let Ok(question) = Query::read(&mut decoder) else { return false; };
+    question == request.queries[0]
+}
+
+pub(super) fn parse_dns_response_for_query(resp: &[u8], query: &[u8]) -> Result<(Vec<IpAddr>, u32)> {
+    if !response_matches_query(resp, query) {
+        return Err(Error::Protocol("DNS response transaction or question does not match request".into()));
+    }
+    let message = decode_dns_response(resp)?;
+    let qtype = message.queries[0].query_type;
+    response_ips(message, Some(qtype))
+}
+
+fn response_ips(message: Message, qtype: Option<RecordType>) -> Result<(Vec<IpAddr>, u32)> {
+    if message.metadata.response_code != ResponseCode::NoError {
+        return Err(Error::NotFound(format!("DNS server returned {}", message.metadata.response_code)));
+    }
+    // Go's parseResponse bounds the entire record by the shortest answer TTL.
+    let ttl = message.answers.iter().map(|answer| answer.ttl.max(1)).min().unwrap_or(300);
+    let ips: Vec<_> = message.answers.iter()
+        .filter(|answer| answer.dns_class == DNSClass::IN)
+        .filter(|answer| qtype.is_none_or(|qtype| answer.record_type() == qtype))
+        .filter_map(|answer| answer.data.ip_addr())
+        .filter(|ip| !matches!(ip, IpAddr::V6(v6) if v6.to_ipv4_mapped().is_some()))
+        .collect();
+    if ips.is_empty() {
+        Err(Error::NotFound("DNS response contains no matching IP addresses".into()))
+    } else {
+        Ok((ips, ttl))
+    }
+}
+
+pub(super) fn retry_with_edns(query: &mut Vec<u8>) -> bool {
+    if query.len() < 12 || query[10..12] != [0, 0] { return false; }
+    let id = u16::from_be_bytes([query[0], query[1]]).wrapping_add(1);
+    query[..2].copy_from_slice(&id.to_be_bytes());
+    query[10..12].copy_from_slice(&1u16.to_be_bytes());
+    // Root owner, OPT, payload 1350, EDNS version 0, DO, no options.
+    query.extend_from_slice(&[0, 0, 41, 5, 70, 0, 0, 0x80, 0, 0, 0]);
+    true
+}
+
+pub(super) async fn query_ip_families<F, Fut>(domain: &str, ipv4: bool, ipv6: bool, mut query: F) -> Result<(Vec<IpAddr>, u32)>
+where
+    F: FnMut(u16) -> Fut,
+    Fut: Future<Output = Result<(Vec<IpAddr>, u32)>>,
+{
+    let a = ipv4.then(|| query(1));
+    let aaaa = ipv6.then(|| query(28));
+    let (a, aaaa) = tokio::join!(
+        async { if let Some(future) = a { Some((future.await, Instant::now())) } else { None } },
+        async { if let Some(future) = aaaa { Some((future.await, Instant::now())) } else { None } },
+    );
+    let (mut ips, mut ttl, mut last_error) = (Vec::new(), u32::MAX, None);
+    for (result, received) in [a, aaaa].into_iter().flatten() {
+        match result {
+            Ok((addresses, lifetime)) => {
+                ips.extend(addresses);
+                ttl = ttl.min(lifetime.saturating_sub(received.elapsed().as_secs().min(u32::MAX as u64) as u32).max(1));
             }
-            (28, 16) => {
-                let b: [u8; 16] = resp[pos..pos + 16].try_into().unwrap();
-                ips.push(IpAddr::V6(std::net::Ipv6Addr::from(b)));
-                min_ttl = min_ttl.min(ttl);
-            }
-            _ => {}
+            Err(error) => last_error = Some(error),
         }
-        pos += rdlength;
     }
     if ips.is_empty() {
-        Err(Error::NotFound(format!("No IP resolved for {}", domain)))
+        Err(last_error.unwrap_or_else(|| Error::NotFound(format!("No IP found for {domain}"))))
     } else {
-        Ok((ips, if min_ttl == u32::MAX || min_ttl == 0 { 300 } else { min_ttl }))
+        Ok((ips, ttl))
     }
 }

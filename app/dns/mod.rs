@@ -48,3 +48,7 @@ mod dnscommon_geoip_test;
 mod dns_config_dispatcher_test;
 #[cfg(test)]
 mod nameserver_burst_test;
+#[cfg(test)]
+mod nameserver_wire_test;
+#[cfg(test)]
+mod nameserver_cache_test;

@@ -5,7 +5,10 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[allow(unused_imports)]
 use tokio::net::UdpSocket;
-use super::nameserver::{NameServer, build_dns_query_with_ecs, parse_dns_response_with_ttl};
+use super::nameserver::{
+    NameServer, parse_dns_response_for_query, query_ip_families, response_matches_query,
+    retry_with_edns, try_build_dns_query_with_ecs,
+};
 use super::nameserver_doh::DohRoutingCtx;
 use crate::common::errors::{Error, Result};
 use crate::common::net::{Address, Destination};
@@ -63,7 +66,12 @@ impl UdpNameServer {
 
 impl UdpNameServer {
     async fn query_qtype(&self, clean: &str, qtype: u16) -> Result<(Vec<IpAddr>, u32)> {
-        let query = build_dns_query_with_ecs(clean, qtype, self.client_ip);
+        tokio::time::timeout(self.timeout, self.query_qtype_inner(clean, qtype))
+            .await.map_err(|_| Error::Timeout)?
+    }
+
+    async fn query_qtype_inner(&self, clean: &str, qtype: u16) -> Result<(Vec<IpAddr>, u32)> {
+        let mut query = try_build_dns_query_with_ecs(clean, qtype, self.client_ip)?;
         if let Some(ctx) = self.routing.as_ref().and_then(|c| c.get()) {
             let dest = Destination::udp(Address::ip(self.server_addr.ip()), self.server_addr.port());
             let session = SessionContext::new(self.tag.as_deref().unwrap_or("dns"), dest);
@@ -73,13 +81,21 @@ impl UdpNameServer {
             }
             if !matches!(picked, "direct" | "freedom" | "dns") && let Some(outbound) = ctx.outbounds.get(picked)
             {
-                let mut stream = pingora_timeout::timeout(self.timeout, outbound.connect(&session))
-                    .await.map_err(|_| Error::Timeout)??;
+                let mut stream = outbound.connect(&session).await?;
                 stream.write_all(&query).await?;
-                let mut buf = [0u8; 2048];
-                let n = pingora_timeout::timeout(self.timeout, stream.read(&mut buf))
-                    .await.map_err(|_| Error::Timeout)??;
-                return parse_dns_response_with_ttl(&buf[..n], clean);
+                stream.flush().await?;
+                let mut buf = vec![0u8; u16::MAX as usize];
+                loop {
+                    let n = stream.read(&mut buf).await?;
+                    if n == 0 { return Err(Error::Protocol("UDP DNS outbound closed without an answer".into())); }
+                    if !response_matches_query(&buf[..n], &query) { continue; }
+                    if buf[2] & 2 != 0 && retry_with_edns(&mut query) {
+                        stream.write_all(&query).await?;
+                        stream.flush().await?;
+                        continue;
+                    }
+                    return parse_dns_response_for_query(&buf[..n], &query);
+                }
             }
         }
         #[cfg(any(target_os = "windows", target_os = "android"))]
@@ -91,9 +107,16 @@ impl UdpNameServer {
         let socket = UdpSocket::bind(if self.server_addr.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" }).await?;
         socket.connect(self.server_addr).await?;
         socket.send(&query).await?;
-        let mut buf = [0u8; 2048];
-        let n = pingora_timeout::timeout(self.timeout, socket.recv(&mut buf)).await.map_err(|_| Error::Timeout)??;
-        parse_dns_response_with_ttl(&buf[..n], clean)
+        let mut buf = vec![0u8; u16::MAX as usize];
+        loop {
+            let n = socket.recv(&mut buf).await?;
+            if !response_matches_query(&buf[..n], &query) { continue; }
+            if buf[2] & 2 != 0 && retry_with_edns(&mut query) {
+                socket.send(&query).await?;
+                continue;
+            }
+            return parse_dns_response_for_query(&buf[..n], &query);
+        }
     }
 }
 
@@ -110,24 +133,6 @@ impl NameServer for UdpNameServer {
         self.query_ip_with_opt(domain, true, false).await.map(|(ips, _)| ips)
     }
     async fn query_ip_with_opt(&self, domain: &str, ipv4: bool, ipv6: bool) -> Result<(Vec<IpAddr>, u32)> {
-        let clean = domain.trim_end_matches('.');
-        let (mut ips, mut ttl, mut last_err) = (Vec::new(), u32::MAX, None);
-        if ipv4 {
-            match self.query_qtype(clean, 1).await {
-                Ok((v, t)) => { ips.extend(v); ttl = ttl.min(t); }
-                Err(e) => last_err = Some(e),
-            }
-        }
-        if ipv6 {
-            match self.query_qtype(clean, 28).await {
-                Ok((v, t)) => { ips.extend(v); ttl = ttl.min(t); }
-                Err(e) => last_err = Some(e),
-            }
-        }
-        if !ips.is_empty() {
-            Ok((ips, if ttl == u32::MAX { 60 } else { ttl }))
-        } else {
-            Err(last_err.unwrap_or_else(|| Error::NotFound(format!("No IP found for {}", clean))))
-        }
+        query_ip_families(domain, ipv4, ipv6, |qtype| self.query_qtype(domain, qtype)).await
     }
 }

@@ -5,7 +5,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[allow(unused_imports)]
 use tokio::net::TcpStream;
-use super::nameserver::{NameServer, build_dns_query_with_ecs, parse_dns_response_with_ttl};
+use super::nameserver::{NameServer, parse_dns_response_for_query, query_ip_families, try_build_dns_query_with_ecs};
 use super::nameserver_doh::DohRoutingCtx;
 use crate::common::errors::{Error, Result};
 use crate::common::net::{BoxStream, Destination};
@@ -63,6 +63,12 @@ impl TcpNameServer {
 
 impl TcpNameServer {
     async fn query_qtype(&self, clean: &str, qtype: u16) -> Result<(Vec<IpAddr>, u32)> {
+        tokio::time::timeout(self.timeout, self.query_qtype_inner(clean, qtype))
+            .await.map_err(|_| Error::Timeout)?
+    }
+
+    async fn query_qtype_inner(&self, clean: &str, qtype: u16) -> Result<(Vec<IpAddr>, u32)> {
+        let query = try_build_dns_query_with_ecs(clean, qtype, self.client_ip)?;
         let mut routed_stream = None;
         if let Some(ctx) = self.routing.as_ref().and_then(|c| c.get()) {
             let dest = Destination::from_ip_port(self.server_addr.ip(), self.server_addr.port());
@@ -73,32 +79,25 @@ impl TcpNameServer {
             }
             if !matches!(picked, "direct" | "freedom" | "dns") && let Some(outbound) = ctx.outbounds.get(picked)
             {
-                routed_stream = Some(
-                    pingora_timeout::timeout(self.timeout, outbound.connect(&session))
-                        .await.map_err(|_| Error::Timeout)??,
-                );
+                routed_stream = Some(outbound.connect(&session).await?);
             }
         }
         let mut stream: BoxStream = match routed_stream {
             Some(s) => s,
-            None => pingora_timeout::timeout(
-                self.timeout,
-                crate::app::pingora_bridge::PingoraCoreConnector::dial_tcp(self.server_addr),
-            )
-            .await.map_err(|_| Error::Timeout)??,
+            None => crate::app::pingora_bridge::PingoraCoreConnector::dial_tcp(self.server_addr).await?,
         };
-        let query = build_dns_query_with_ecs(clean, qtype, self.client_ip);
-        pingora_timeout::timeout(self.timeout, async {
-            stream.write_all(&(query.len() as u16).to_be_bytes()).await?;
-            stream.write_all(&query).await
-        })
-        .await.map_err(|_| Error::Timeout)??;
+        let query_len = u16::try_from(query.len())
+            .map_err(|_| Error::Protocol("DNS query exceeds TCP frame size".into()))?;
+        stream.write_all(&query_len.to_be_bytes()).await?;
+        stream.write_all(&query).await?;
+        stream.flush().await?;
         let mut resp_len_buf = [0u8; 2];
-        pingora_timeout::timeout(self.timeout, stream.read_exact(&mut resp_len_buf))
-            .await.map_err(|_| Error::Timeout)??;
-        let mut resp = vec![0u8; u16::from_be_bytes(resp_len_buf) as usize];
-        pingora_timeout::timeout(self.timeout, stream.read_exact(&mut resp)).await.map_err(|_| Error::Timeout)??;
-        parse_dns_response_with_ttl(&resp, clean)
+        stream.read_exact(&mut resp_len_buf).await?;
+        let response_len = u16::from_be_bytes(resp_len_buf) as usize;
+        if response_len < 12 { return Err(Error::Protocol("DNS TCP frame is shorter than a header".into())); }
+        let mut resp = vec![0u8; response_len];
+        stream.read_exact(&mut resp).await?;
+        parse_dns_response_for_query(&resp, &query)
     }
 }
 
@@ -115,24 +114,6 @@ impl NameServer for TcpNameServer {
         self.query_ip_with_opt(domain, true, false).await.map(|(ips, _)| ips)
     }
     async fn query_ip_with_opt(&self, domain: &str, ipv4: bool, ipv6: bool) -> Result<(Vec<IpAddr>, u32)> {
-        let clean = domain.trim_end_matches('.');
-        let (mut ips, mut ttl, mut last_err) = (Vec::new(), u32::MAX, None);
-        if ipv4 {
-            match self.query_qtype(clean, 1).await {
-                Ok((v, t)) => { ips.extend(v); ttl = ttl.min(t); }
-                Err(e) => last_err = Some(e),
-            }
-        }
-        if ipv6 {
-            match self.query_qtype(clean, 28).await {
-                Ok((v, t)) => { ips.extend(v); ttl = ttl.min(t); }
-                Err(e) => last_err = Some(e),
-            }
-        }
-        if !ips.is_empty() {
-            Ok((ips, if ttl == u32::MAX { 60 } else { ttl }))
-        } else {
-            Err(last_err.unwrap_or_else(|| Error::NotFound(format!("No IP found for {}", clean))))
-        }
+        query_ip_families(domain, ipv4, ipv6, |qtype| self.query_qtype(domain, qtype)).await
     }
 }

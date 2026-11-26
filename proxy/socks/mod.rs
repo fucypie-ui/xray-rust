@@ -4,6 +4,10 @@ pub mod server;
 
 #[cfg(test)]
 mod socks_client_test;
+#[cfg(test)]
+mod protocol_test;
+#[cfg(test)]
+mod server_test;
 
 pub use client::Client;
 pub use protocol::SocksProtocol;
