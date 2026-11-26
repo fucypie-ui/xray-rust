@@ -159,7 +159,7 @@ mod tests {
         let cert = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
         let server = TlsServer::from_der_with_alpn(
             vec![cert.cert.der().clone()],
-            rustls_pki_types::PrivateKeyDer::Pkcs8(cert.key_pair.serialize_der().into()),
+            rustls_pki_types::PrivateKeyDer::Pkcs8(cert.signing_key.serialize_der().into()),
             vec![b"h2".to_vec()],
         ).unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

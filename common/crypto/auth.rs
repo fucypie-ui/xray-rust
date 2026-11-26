@@ -1,5 +1,5 @@
 use crate::common::errors::{Error, Result};
-use hkdf::hmac::{Hmac, Mac};
+use hkdf::hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;

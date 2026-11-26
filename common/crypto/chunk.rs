@@ -45,7 +45,7 @@ pub struct AeadChaCha20ChunkWriter<W> {
 
 impl<W: AsyncWrite + Unpin> AeadChaCha20ChunkWriter<W> {
     pub fn new(writer: W, key: &[u8; 32]) -> Self {
-        let key_ref = Key::from_slice(key);
+        let key_ref: &Key = key.into();
         let cipher = ChaCha20Poly1305::new(key_ref);
         Self {
             writer,
@@ -54,7 +54,7 @@ impl<W: AsyncWrite + Unpin> AeadChaCha20ChunkWriter<W> {
         }
     }
     pub async fn write_chunk(&mut self, data: &[u8]) -> Result<()> {
-        let nonce = Nonce::from_slice(self.nonce.next());
+        let nonce: &Nonce = self.nonce.next().try_into().expect("12-byte chunk nonce");
         let ciphertext = self.cipher.encrypt(nonce, data).map_err(|e| Error::Crypto(e.to_string()))?;
         PlainChunk::write_chunk(&mut self.writer, &ciphertext).await
     }
@@ -68,7 +68,7 @@ pub struct AeadChaCha20ChunkReader<R> {
 
 impl<R: AsyncRead + Unpin> AeadChaCha20ChunkReader<R> {
     pub fn new(reader: R, key: &[u8; 32]) -> Self {
-        let key_ref = Key::from_slice(key);
+        let key_ref: &Key = key.into();
         let cipher = ChaCha20Poly1305::new(key_ref);
         Self {
             reader,
@@ -78,7 +78,7 @@ impl<R: AsyncRead + Unpin> AeadChaCha20ChunkReader<R> {
     }
     pub async fn read_chunk(&mut self) -> Result<Vec<u8>> {
         let ciphertext = PlainChunk::read_chunk(&mut self.reader).await?;
-        let nonce = Nonce::from_slice(self.nonce.next());
+        let nonce: &Nonce = self.nonce.next().try_into().expect("12-byte chunk nonce");
         self.cipher.decrypt(nonce, ciphertext.as_ref()).map_err(|e| Error::Crypto(e.to_string()))
     }
 }

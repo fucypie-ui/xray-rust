@@ -1,11 +1,11 @@
 use async_trait::async_trait;
-use rand::RngCore;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tokio::net::lookup_host;
 
 pub fn generate_random_bytes(len: usize) -> Vec<u8> {
     let mut buf = vec![0u8; len];
-    rand::thread_rng().fill_bytes(&mut buf);
+    rand::rng().fill_bytes(&mut buf);
     buf
 }
 

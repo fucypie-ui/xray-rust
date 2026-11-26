@@ -1,5 +1,5 @@
 use crate::common::net::Network;
-use rand::Rng;
+use rand::RngExt;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
@@ -132,10 +132,10 @@ pub fn xtls_padding(
 ) -> Vec<u8> {
     let seed = testseed.unwrap_or(&[900, 500, 900, 256]);
     let content_len = content.map_or(0, |c| c.len()) as i32;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut pad = if (content_len as u32) < seed[0] && long_padding {
-        (if seed[1] > 0 { rng.gen_range(0..seed[1]) as i32 } else { 0 }) + seed[2] as i32 - content_len
-    } else if seed[3] > 0 { rng.gen_range(0..seed[3]) as i32 } else { 0 };
+        (if seed[1] > 0 { rng.random_range(0..seed[1]) as i32 } else { 0 }) + seed[2] as i32 - content_len
+    } else if seed[3] > 0 { rng.random_range(0..seed[3]) as i32 } else { 0 };
     pad = pad.min(((BUFFER_SIZE as i32) - 21 - content_len).max(0)).max(0);
     let mut out = Vec::new();
     if let Some(u) = user_uuid { out.extend_from_slice(u); }

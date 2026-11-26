@@ -1,12 +1,12 @@
-use rand::{Rng, RngCore};
+use rand::{RngExt, Rng};
 use serde::{Deserialize, Serialize};
 
 pub use super::config_pb::{BridgeConfig, Control, PortalConfig};
 
 impl Control {
     pub fn fill_in_random(&mut self) {
-        let mut rng = rand::thread_rng();
-        let len = rng.gen_range(1..=64);
+        let mut rng = rand::rng();
+        let len = rng.random_range(1..=64);
         let mut buf = vec![0u8; len];
         rng.fill_bytes(&mut buf);
         self.random = buf;

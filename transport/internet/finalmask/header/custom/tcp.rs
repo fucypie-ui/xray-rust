@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::RngExt;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
@@ -19,13 +19,13 @@ pub async fn read_sequence<R: AsyncRead + Unpin>(reader: &mut R, sequence: &TCPS
 }
 
 fn generate_rand_bytes(count: usize, r_min: u8, r_max: u8) -> Vec<u8> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut out = Vec::with_capacity(count);
     for _ in 0..count {
         let b = if r_min == r_max {
             r_min
         } else {
-            rng.gen_range(r_min..=r_max)
+            rng.random_range(r_min..=r_max)
         };
         out.push(b);
     }
@@ -36,7 +36,7 @@ fn generate_delay(min_d: u64, max_d: u64) -> u64 {
     if min_d == max_d {
         min_d
     } else {
-        rand::thread_rng().gen_range(min_d..=max_d)
+        rand::rng().random_range(min_d..=max_d)
     }
 }
 

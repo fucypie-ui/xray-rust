@@ -142,7 +142,7 @@ mod tests {
             assert_eq!(part2.len(), 377);
 
             ws_tx
-                .send(Message::Binary(b"\x00\x00ECHO_OK".to_vec()))
+                .send(Message::Binary(b"\x00\x00ECHO_OK".to_vec().into()))
                 .await
                 .unwrap();
         });
@@ -226,7 +226,7 @@ mod tests {
             assert!(first_frame[5..].iter().all(|&b| b == 0xAB));
 
             ws_tx
-                .send(Message::Binary(b"\x00\x00OK".to_vec()))
+                .send(Message::Binary(b"\x00\x00OK".to_vec().into()))
                 .await
                 .unwrap();
         });

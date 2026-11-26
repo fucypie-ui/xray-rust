@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::super::conn::SimpleAead;
-    use rand::RngCore;
+    use rand::Rng;
 
     #[test]
     fn test_simple_seal_open_roundtrip() {
@@ -21,7 +21,7 @@ mod tests {
     fn test_simple_bounce() {
         let aead = SimpleAead::new();
         let mut buf = vec![0u8; aead.overhead() + 16];
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         for _ in 0..1000 {
             rng.fill_bytes(&mut buf);
@@ -35,7 +35,7 @@ mod tests {
         let aead = SimpleAead::new();
         for len in 0..128 {
             let mut data = vec![0u8; len];
-            rand::thread_rng().fill_bytes(&mut data);
+            rand::rng().fill_bytes(&mut data);
             let sealed = aead.seal(&data);
             let opened = aead.open(&sealed).unwrap();
             assert_eq!(opened, data);

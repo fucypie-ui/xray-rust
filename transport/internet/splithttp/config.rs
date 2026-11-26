@@ -14,8 +14,8 @@ impl RangeConfig {
     pub fn new(from: i32, to: i32) -> Self { Self { from, to } }
     pub fn rand(&self) -> i32 {
         if self.from >= self.to { return self.from; }
-        use rand::Rng;
-        rand::thread_rng().gen_range(self.from..=self.to)
+        use rand::RngExt;
+        rand::rng().random_range(self.from..=self.to)
     }
 }
 

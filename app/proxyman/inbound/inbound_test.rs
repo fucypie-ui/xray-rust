@@ -71,7 +71,7 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         let key_pem_lines: Vec<String> = cert_key
-            .key_pair
+            .signing_key
             .serialize_pem()
             .lines()
             .map(|s| s.to_string())
@@ -203,7 +203,7 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         let key_pem_lines: Vec<String> = cert_key
-            .key_pair
+            .signing_key
             .serialize_pem()
             .lines()
             .map(|s| s.to_string())
@@ -336,7 +336,7 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         let key_pem_lines: Vec<String> = cert_key
-            .key_pair
+            .signing_key
             .serialize_pem()
             .lines()
             .map(|s| s.to_string())
@@ -456,7 +456,7 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         let key_pem_lines: Vec<String> = cert_key
-            .key_pair
+            .signing_key
             .serialize_pem()
             .lines()
             .map(|s| s.to_string())

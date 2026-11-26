@@ -21,9 +21,9 @@ pub async fn pick_port() -> u16 {
 }
 
 pub fn random_payload(size: usize) -> Vec<u8> {
-    use rand::RngCore;
+    use rand::Rng;
     let mut buf = vec![0u8; size];
-    rand::thread_rng().fill_bytes(&mut buf);
+    rand::rng().fill_bytes(&mut buf);
     buf
 }
 

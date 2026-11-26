@@ -1,7 +1,7 @@
 use aes_gcm::aead::{Aead, KeyInit, Payload};
-use aes_gcm::{Aes128Gcm, Nonce as AesNonce};
-use chacha20poly1305::{ChaCha20Poly1305, Nonce as ChaChaNonce};
-use rand::Rng;
+use aes_gcm::Aes128Gcm;
+use chacha20poly1305::ChaCha20Poly1305;
+use rand::RngExt;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -53,11 +53,9 @@ pub struct VlessAead {
 impl VlessAead {
     pub fn new(key: &[u8; 32], use_aes: bool) -> Self {
         let cipher = if use_aes {
-            let k = aes_gcm::Key::<Aes128Gcm>::from_slice(&key[..16]);
-            VlessCipher::AesGcm(Box::new(Aes128Gcm::new(k)))
+            VlessCipher::AesGcm(Box::new(Aes128Gcm::new_from_slice(&key[..16]).expect("16-byte AES key")))
         } else {
-            let k = chacha20poly1305::Key::from_slice(key);
-            VlessCipher::ChaCha(ChaCha20Poly1305::new(k))
+            VlessCipher::ChaCha(ChaCha20Poly1305::new(key.into()))
         };
         Self {
             cipher,
@@ -68,16 +66,16 @@ impl VlessAead {
         increase_nonce(&mut self.nonce);
         let payload = Payload { msg: plaintext, aad };
         match &self.cipher {
-            VlessCipher::AesGcm(c) => c.encrypt(AesNonce::from_slice(&self.nonce), payload).map_err(|e| Error::Crypto(format!("AES-GCM seal error: {}", e))),
-            VlessCipher::ChaCha(c) => c.encrypt(ChaChaNonce::from_slice(&self.nonce), payload).map_err(|e| Error::Crypto(format!("ChaCha seal error: {}", e))),
+            VlessCipher::AesGcm(c) => c.encrypt((&self.nonce).into(), payload).map_err(|e| Error::Crypto(format!("AES-GCM seal error: {}", e))),
+            VlessCipher::ChaCha(c) => c.encrypt((&self.nonce).into(), payload).map_err(|e| Error::Crypto(format!("ChaCha seal error: {}", e))),
         }
     }
     pub fn open(&mut self, ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
         increase_nonce(&mut self.nonce);
         let payload = Payload { msg: ciphertext, aad };
         match &self.cipher {
-            VlessCipher::AesGcm(c) => c.decrypt(AesNonce::from_slice(&self.nonce), payload).map_err(|e| Error::Crypto(format!("AES-GCM open error: {}", e))),
-            VlessCipher::ChaCha(c) => c.decrypt(ChaChaNonce::from_slice(&self.nonce), payload).map_err(|e| Error::Crypto(format!("ChaCha open error: {}", e))),
+            VlessCipher::AesGcm(c) => c.decrypt((&self.nonce).into(), payload).map_err(|e| Error::Crypto(format!("AES-GCM open error: {}", e))),
+            VlessCipher::ChaCha(c) => c.decrypt((&self.nonce).into(), payload).map_err(|e| Error::Crypto(format!("ChaCha open error: {}", e))),
         }
     }
 }
@@ -98,11 +96,11 @@ pub fn parse_padding(padding: &str) -> Result<(Vec<[i32; 3]>, Vec<[i32; 3]>)> {
 }
 
 pub fn create_padding(padding_lens: &[[i32; 3]], padding_gaps: &[[i32; 3]]) -> (usize, Vec<usize>, Vec<Duration>) {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let sample = |rng: &mut rand::rngs::ThreadRng, y: &[i32; 3]| {
-        if y[0] >= rng.gen_range(0..=100) {
+        if y[0] >= rng.random_range(0..=100) {
             let (lo, hi) = (y[1].min(y[2]), y[1].max(y[2]));
-            if hi > lo { rng.gen_range(lo..=hi) } else { lo }
+            if hi > lo { rng.random_range(lo..=hi) } else { lo }
         } else { 0 }
     };
     let lens_in = if padding_lens.is_empty() { &[[100, 111, 1111], [50, 0, 3333]][..] } else { padding_lens };

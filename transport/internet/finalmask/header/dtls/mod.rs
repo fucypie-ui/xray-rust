@@ -1,7 +1,7 @@
 pub mod config;
 pub mod conn;
 
-use rand::Rng;
+use rand::RngExt;
 
 #[derive(Debug, Clone)]
 pub struct DtlsHeader {
@@ -12,9 +12,9 @@ pub struct DtlsHeader {
 
 impl DtlsHeader {
     pub fn new() -> Self {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         Self {
-            epoch: rng.r#gen(),
+            epoch: rng.random(),
             sequence: 0,
             length: 17,
         }

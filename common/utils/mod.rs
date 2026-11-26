@@ -3,7 +3,7 @@ pub mod browser;
 pub mod padding;
 pub mod typed_sync_map;
 
-use rand::Rng;
+use rand::RngExt;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::RwLock;
@@ -13,10 +13,10 @@ const H2_PACK_CORRECTION_FACTOR: f64 = 1.2493702770780857;
 
 pub fn h2_base62_pad(expected_len: usize) -> String {
     let actual_len = (expected_len as f64 * H2_PACK_CORRECTION_FACTOR) as usize;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut result = Vec::with_capacity(actual_len);
     for _ in 0..actual_len {
-        let idx = rng.gen_range(0..BASE62_CHARS.len());
+        let idx = rng.random_range(0..BASE62_CHARS.len());
         result.push(BASE62_CHARS[idx]);
     }
     String::from_utf8(result).unwrap_or_default()

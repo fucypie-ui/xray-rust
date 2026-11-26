@@ -6,7 +6,7 @@ mod tests {
     fn test_map_filter() {
         let filter = ReplayFilter::<[u8; 16]>::new(120);
         let mut sample = [0u8; 16];
-        rand::Rng::fill(&mut rand::thread_rng(), &mut sample);
+        rand::RngExt::fill(&mut rand::rng(), &mut sample);
 
         assert!(filter.check(sample));
         assert!(!filter.check(sample), "Unexpected true negative");

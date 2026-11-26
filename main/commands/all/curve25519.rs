@@ -4,7 +4,7 @@ use base64::Engine;
 use base64::alphabet;
 use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use rand::RngCore;
+use rand::Rng;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 /// Match Go's non-strict DecodeString, including ignored CR/LF and returned
@@ -39,7 +39,7 @@ pub fn gen_curve25519(input_key: Option<&[u8]>) -> Result<([u8; 32], [u8; 32], [
         Some(input) if !input.is_empty() => {
             return Err(Error::Config("Invalid length of X25519 private key.".into()));
         }
-        _ => rand::thread_rng().fill_bytes(&mut private),
+        _ => rand::rng().fill_bytes(&mut private),
     }
     // Print the clamped scalar, rather than just relying on X25519 to clamp
     // internally. This is the private-key representation printed by Go.

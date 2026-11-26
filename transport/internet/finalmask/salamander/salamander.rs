@@ -1,5 +1,5 @@
 use crate::common::errors::{Error, Result};
-use rand::Rng;
+use rand::RngExt;
 
 pub const SM_PSK_MIN_LEN: usize = 4;
 pub const SM_SALT_LEN: usize = 8;
@@ -115,7 +115,7 @@ impl SalamanderObfuscator {
         let out_len = input.len() + SM_SALT_LEN;
         if output.len() < out_len { return 0; }
         let mut salt = [0u8; SM_SALT_LEN];
-        rand::thread_rng().fill(&mut salt);
+        rand::rng().fill(&mut salt);
         output[..SM_SALT_LEN].copy_from_slice(&salt);
         let key = self.key(&salt);
         for (i, &b) in input.iter().enumerate() { output[i + SM_SALT_LEN] = b ^ key[i % SM_KEY_LEN]; }

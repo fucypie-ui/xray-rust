@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::RngExt;
 
 pub const PADDING_METHOD_REPEAT_X: &str = "repeat-x";
 pub const PADDING_METHOD_TOKENISH: &str = "tokenish";
@@ -7,10 +7,10 @@ pub const CHARSET_BASE62: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh
 
 pub fn rand_string_base62(n: usize) -> String {
     if n == 0 { return String::new(); }
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut s = String::with_capacity(n);
     for _ in 0..n {
-        let idx = rng.gen_range(0..CHARSET_BASE62.len());
+        let idx = rng.random_range(0..CHARSET_BASE62.len());
         s.push(CHARSET_BASE62[idx] as char);
     }
     s

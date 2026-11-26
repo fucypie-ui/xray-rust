@@ -42,7 +42,7 @@ pub async fn new_tcp_stream(endpoint: SocketAddr, iface: Option<&OutboundInterfa
         trace!("tcp socket bound to interface: {socket:?}");
     }
     socket.set_keepalive(true)?;
-    socket.set_nodelay(true)?;
+    socket.set_tcp_nodelay(true)?;
     socket.set_nonblocking(true)?;
     timeout(Duration::from_secs(10), TcpSocket::from_std_stream(socket.into()).connect(endpoint)).await?
 }
