@@ -3,6 +3,8 @@ use crate::common::errors::Result;
 
 pub struct ChaChaCore {
     pub state: [u32; 16],
+    keystream: [u8; 64],
+    offset: usize,
 }
 
 #[inline(always)]
@@ -31,10 +33,27 @@ impl ChaChaCore {
         for i in 0..8 { state[4 + i] = u32::from_le_bytes(key[i * 4..(i + 1) * 4].try_into().unwrap()); }
         state[12] = 0;
         for i in 0..3 { state[13 + i] = u32::from_le_bytes(nonce[i * 4..(i + 1) * 4].try_into().unwrap()); }
-        Self { state }
+        Self { state, keystream: [0; 64], offset: 64 }
     }
-    pub fn set_counter(&mut self, counter: u32) { self.state[12] = counter; }
+    /// Accept both nonce lengths supported by Xray-core's NewChaCha20Stream.
+    pub fn from_nonce(key: &[u8; 32], nonce: &[u8]) -> Result<Self> {
+        if nonce.len() != 8 && nonce.len() != 12 {
+            return Err(crate::common::errors::Error::Crypto(
+                "ChaCha20 nonce must be 8 or 12 bytes".into(),
+            ));
+        }
+        let mut expanded = [0u8; 12];
+        expanded[12 - nonce.len()..].copy_from_slice(nonce);
+        Ok(Self::new(key, &expanded))
+    }
+
+    pub fn set_counter(&mut self, counter: u32) {
+        self.state[12] = counter;
+        self.offset = 64;
+    }
     pub fn block(&mut self, output: &mut [u8; 64]) {
+        // A direct block request discards any partially consumed cached block.
+        self.offset = 64;
         let mut x = self.state;
         for _ in 0..10 {
             qr(&mut x, 0, 4, 8, 12); qr(&mut x, 1, 5, 9, 13); qr(&mut x, 2, 6, 10, 14); qr(&mut x, 3, 7, 11, 15);
@@ -49,12 +68,19 @@ impl ChaChaCore {
 
 impl StreamCipher for ChaChaCore {
     fn encrypt(&mut self, buffer: &mut [u8]) -> Result<()> {
-        let mut block = [0u8; 64];
         let mut offset = 0;
         while offset < buffer.len() {
-            self.block(&mut block);
-            let chunk = std::cmp::min(64, buffer.len() - offset);
-            for i in 0..chunk { buffer[offset + i] ^= block[i]; }
+            if self.offset == 64 {
+                let mut block = [0u8; 64];
+                self.block(&mut block);
+                self.keystream = block;
+                self.offset = 0;
+            }
+            let chunk = std::cmp::min(64 - self.offset, buffer.len() - offset);
+            for i in 0..chunk {
+                buffer[offset + i] ^= self.keystream[self.offset + i];
+            }
+            self.offset += chunk;
             offset += chunk;
         }
         Ok(())

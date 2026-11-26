@@ -21,7 +21,7 @@ pub mod io_test;
 
 pub use aes::{AesGcmCipher, new_aes_gcm};
 pub use auth::Authentication;
-pub use chacha20::ChaCha20Cipher;
+pub use chacha20::{ChaCha20Cipher, new_chacha20_stream};
 pub use chunk::{AeadChaCha20ChunkReader, AeadChaCha20ChunkWriter, IncreasingNonce, PlainChunk};
 pub use crypto::{StreamCipher, rand_between, rand_bytes_between};
 pub use internal::chacha::ChaChaCore;
@@ -32,3 +32,5 @@ mod crypto_internal_test;
 mod crypto_protocol_full_test;
 #[cfg(test)]
 mod crypto_test;
+#[cfg(test)]
+mod stream_test;
