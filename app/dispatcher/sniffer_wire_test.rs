@@ -250,7 +250,7 @@ fn quic_later_incomplete_packet_does_not_hide_prior_authentication_failure() {
 fn initial_with_frames(frames: &[u8]) -> Vec<u8> {
     use aes_gcm::aead::{Aead, KeyInit, Payload};
     use aes_gcm::aes::Aes128;
-    use aes_gcm::aes::cipher::{Block, BlockEncrypt};
+    use aes_gcm::aes::cipher::{Block, BlockCipherEncrypt};
     use aes_gcm::Aes128Gcm;
 
     // RFC 9001 Appendix A.1 client keys for this fixed DCID. These do not

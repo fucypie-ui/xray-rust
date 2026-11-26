@@ -23,7 +23,7 @@ pub fn gen_mlkem768(input_seed: Option<&[u8; 64]>) -> ([u8; 64], Vec<u8>, [u8; 3
         Some(input) => seed.copy_from_slice(input),
         None => rand::rng().fill_bytes(&mut seed),
     }
-    // Use our existing rand 0.8 only for the seed; the deterministic
+    // Use the application RNG only for the seed; the deterministic
     // constructor avoids coupling its rand_core version to ml-kem's.
     let key = DecapsulationKey768::from_seed(Seed::from(seed));
     let client = key.encapsulation_key().to_bytes().to_vec();
