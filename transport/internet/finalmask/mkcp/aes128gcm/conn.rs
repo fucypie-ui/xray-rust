@@ -40,7 +40,7 @@ impl Aes128GcmPacketConn {
     pub fn unwrap(&self, packet: &[u8]) -> Result<Vec<u8>> {
         if packet.len() < GCM_NONCE_SIZE + GCM_TAG_SIZE { return Err(Error::Protocol("aead short length".into())); }
         let (nonce_bytes, ciphertext) = packet.split_at(GCM_NONCE_SIZE);
-        let nonce: &Nonce = nonce_bytes.try_into().expect("12-byte packet nonce");
+        let nonce: &Nonce<_> = nonce_bytes.try_into().expect("12-byte packet nonce");
         self.cipher.decrypt(nonce, ciphertext).map_err(|e| Error::Protocol(format!("aead open: {:?}", e)))
     }
 }

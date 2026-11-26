@@ -55,7 +55,7 @@ impl CipherState {
 
     pub(crate) fn seal(&mut self, plaintext: &[u8]) -> io::Result<Vec<u8>> {
         self.check_nonce()?;
-        let nonce: &Nonce = (&self.nonce).into();
+        let nonce: &Nonce<_> = (&self.nonce).into();
         let result = match &self.cipher {
             AesCipher::Aes128(cipher) => cipher.encrypt(nonce, plaintext),
             AesCipher::Aes256(cipher) => cipher.encrypt(nonce, plaintext),
@@ -66,7 +66,7 @@ impl CipherState {
 
     pub(crate) fn open(&mut self, ciphertext: &[u8]) -> io::Result<Vec<u8>> {
         self.check_nonce()?;
-        let nonce: &Nonce = (&self.nonce).into();
+        let nonce: &Nonce<_> = (&self.nonce).into();
         let result = match &self.cipher {
             AesCipher::Aes128(cipher) => cipher.decrypt(nonce, ciphertext),
             AesCipher::Aes256(cipher) => cipher.decrypt(nonce, ciphertext),

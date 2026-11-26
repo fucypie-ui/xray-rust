@@ -12,11 +12,11 @@ impl VmessAeadEncryptor {
         Self { cipher }
     }
     pub fn seal(&self, nonce: &[u8; 12], plaintext: &[u8]) -> Result<Vec<u8>> {
-        let n: &Nonce = nonce.into();
+        let n: &Nonce<_> = nonce.into();
         self.cipher.encrypt(n, plaintext).map_err(|e| Error::Crypto(e.to_string()))
     }
     pub fn open(&self, nonce: &[u8; 12], ciphertext: &[u8]) -> Result<Vec<u8>> {
-        let n: &Nonce = nonce.into();
+        let n: &Nonce<_> = nonce.into();
         self.cipher.decrypt(n, ciphertext).map_err(|e| Error::Crypto(e.to_string()))
     }
 }

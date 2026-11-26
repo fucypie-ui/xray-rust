@@ -3,7 +3,7 @@ use crate::common::errors::{Error, Result};
 use crate::common::net::BoxStream;
 use crate::transport::internet::tls::TlsServer;
 use crate::transport::internet::websocket::ws::PrefixedStream;
-use aes_gcm::{Aes256Gcm, Nonce, aead::{Aead, KeyInit, Payload}};
+use aes_gcm::{Aes256Gcm, aead::{Aead, KeyInit, Payload}};
 use base64::Engine;
 use hkdf::Hkdf;
 use sha2::Sha256;
@@ -54,7 +54,7 @@ pub fn seal_session_id(
     pt[8..8 + sid_len].copy_from_slice(&short_id[..sid_len]);
     let cipher = Aes256Gcm::new_from_slice(auth_key)
         .map_err(|e| Error::Protocol(format!("Invalid AES-GCM key: {:?}", e)))?;
-    let ct = cipher.encrypt(Nonce::from_slice(nonce_12), Payload { msg: &pt, aad: client_hello_raw })
+    let ct = cipher.encrypt(nonce_12.try_into().expect("12-byte REALITY nonce"), Payload { msg: &pt, aad: client_hello_raw })
         .map_err(|e| Error::Protocol(format!("REALITY SessionId seal error: {:?}", e)))?;
     ct.try_into().map_err(|_| Error::Protocol("Sealed session ID must be 32 bytes".into()))
 }
@@ -67,7 +67,7 @@ pub fn open_session_id(
 ) -> Result<RealityAuthSession> {
     let cipher = Aes256Gcm::new_from_slice(auth_key)
         .map_err(|e| Error::Protocol(format!("Invalid AES-GCM key: {:?}", e)))?;
-    let pt = cipher.decrypt(Nonce::from_slice(nonce_12), Payload { msg: sealed_session_id, aad: client_hello_raw })
+    let pt = cipher.decrypt(nonce_12.try_into().expect("12-byte REALITY nonce"), Payload { msg: sealed_session_id, aad: client_hello_raw })
         .map_err(|e| Error::Protocol(format!("REALITY SessionId open auth error: {:?}", e)))?;
     if pt.len() != 16 { return Err(Error::Protocol("Decrypted session plaintext must be 16 bytes".into())); }
     Ok(RealityAuthSession {
