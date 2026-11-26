@@ -1,0 +1,51 @@
+{
+  "manifest": "debug_panel/dioxus_app/Cargo.toml",
+  "direct_dependencies_verified": 5,
+  "dependencies": [
+    {
+      "alias": "dioxus",
+      "crate": "dioxus",
+      "version": "0.7.10",
+      "section": "dependencies",
+      "sources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ]
+    },
+    {
+      "alias": "reqwest",
+      "crate": "reqwest",
+      "version": "0.13.5",
+      "section": "dependencies",
+      "sources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ]
+    },
+    {
+      "alias": "serde",
+      "crate": "serde",
+      "version": "1.0.229",
+      "section": "dependencies",
+      "sources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ]
+    },
+    {
+      "alias": "serde_json",
+      "crate": "serde_json",
+      "version": "1.0.154",
+      "section": "dependencies",
+      "sources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ]
+    },
+    {
+      "alias": "tokio",
+      "crate": "tokio",
+      "version": "1.54.1",
+      "section": "dependencies",
+      "sources": [
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ]
+    }
+  ]
+}

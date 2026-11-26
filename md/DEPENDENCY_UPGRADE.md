@@ -84,7 +84,13 @@ The table records registry evidence, not a build-success claim. Linux resolver a
 
 The former sha-1 package was also verified: its latest stable release is 0.10.1 ([official API](https://crates.io/api/v1/crates/sha-1)). Its maintained successor sha1 0.11.0 is required for the digest 0.11 ecosystem used by HKDF 0.13. The SHA-1 algorithm and Shadowsocks subkey bytes stay unchanged. Both original and replacement registry evidence are in DEPENDENCY_UPGRADE.json.
 
-Pending Linux resolution, API migrations, strict CI, and pinned Go fixture comparison.
+Linux resolution passed for all 72 direct manifest entries (67 root including target-specific dependencies, 5 standalone desktop) in [run 45889627673](https://github.com/fucypie-ui/xray-rust/actions/runs/45889627673/job/140148780991), using commit 72d16e477faac0efe98888fa2ae5b944e88a0d13. Both lockfiles were downloaded from the latest-dependency-locks artifact without local Cargo. The compact resolver reports are committed under dependency-resolution/. The resolver verified every selected version and the full pinned rustls Git source.
+
+The standalone Dioxus desktop app passed all-target checking with RUSTFLAGS=-D warnings on Ubuntu 24.04 in [run 45889058069](https://github.com/fucypie-ui/xray-rust/actions/runs/45889058069/job/140147072420). This checks native Linux GTK/WebKit compilation, not Windows/macOS/Android packaging or graphical runtime operation.
+
+Pinned Go fixture regeneration and byte-for-byte comparison passed in [run 45888807788](https://github.com/fucypie-ui/xray-rust/actions/runs/45888807788/job/140146081985), retaining Go reference 67756b3674d56b72c7a7e675e8dcd3f883e1b2f7.
+
+Root strict check/build/tests/release are pending validation with the downloaded locks.
 
 ## Approved REALITY source override
 
