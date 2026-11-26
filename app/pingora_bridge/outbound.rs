@@ -319,7 +319,7 @@ mod tests {
         tokio::time::timeout(LIMIT, async {
             for cached in [false, true] {
                 let child = Arc::new(ChildSpy::new("ready"));
-                let pooled = wrapper(&[child.clone()]);
+                let pooled = wrapper(std::slice::from_ref(&child));
                 let tcp = session(false);
                 let (stream, mut peer) = tokio::io::duplex(32);
                 let stream: BoxStream = Box::pin(stream);

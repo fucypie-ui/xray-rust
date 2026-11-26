@@ -6,7 +6,7 @@ use crate::features::outbound::OutboundHandler;
 use crate::transport::internet::TcpDialer;
 use crate::transport::internet::dialer::Dialer as StreamDialer;
 use shadowsocks::{config::ServerType, context::SharedContext, relay::tcprelay::ProxyClientStream};
-use std::{pin::Pin, sync::Arc};
+use std::sync::Arc;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use super::runtime;
 
@@ -93,7 +93,7 @@ impl OutboundHandler for Client {
                 // Upstream explicitly supports an empty poll_write to send the target.
                 // write_all(&[]) would skip poll_write, and flush alone sends no header.
                 // Eager handshake also supports targets that speak before their client.
-                futures::future::poll_fn(|cx| Pin::new(&mut stream).poll_write(cx, &[])).await?;
+                futures::future::poll_fn(|cx| std::pin::Pin::new(&mut stream).poll_write(cx, &[])).await?;
                 stream.flush().await?;
                 Ok(Box::pin(stream) as BoxStream)
             } => result,
