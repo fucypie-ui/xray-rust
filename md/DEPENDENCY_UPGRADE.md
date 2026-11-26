@@ -123,3 +123,9 @@ The complete manifests/audit/workflow handoff is available through commit 72d16e
 The parent REALITY lane has replaced the older AES-GCM implementation with ring. Keep that newer implementation when integrating: do not replay this branch's baseline transport/internet/reality/reality.rs AES-array migration over it. Use the rcgen signing_key migration wherever its current tests still access key_pair.
 
 For Linux scenario validation, df2dfcd213d81c231d1630e933451bc8a827f10e cherry-picks the parent's committed e28be5b4fd5eee51c6e372e3eab649c91bc88466 test-lifetime fix. testing/scenarios/common.rs must preserve both retained Vec<Instance>/close-before-abort cleanup and rand 0.10's Rng/rng API. The parent already has the lifetime fix and should avoid applying it twice. No uncommitted files from the parent worktree were imported.
+
+## SS2022 integration supplement
+
+The SS2022 integration adds one root dependency: `shadowsocks-crypto 0.8.0`, with default features disabled and only `v2` enabled. A fresh official registry query confirms it is the newest non-yanked stable release; the exact evidence is appended to `DEPENDENCY_UPGRADE.json`. The current manifest census is 73 direct entries / 70 unique packages. Earlier 72-entry Linux reports above remain historical evidence for their own revision.
+
+Ubuntu parity-preparation run `45893018658` at `1ea1cf2` resolved the new root lock conservatively. Its prepared manifest was byte-identical to the reviewed manifest before importing the lock at `c92390f`. The resolved crate checksum is `b404a62ebea5003f44b9a2748dee7555c5f9ae39896508e466a2a91ee6fa5df5`. This resolver pass is not a successful combined Rust compile/test claim; see `PORTING_STATUS.md` for later diagnostics and validation.

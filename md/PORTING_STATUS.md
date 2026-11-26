@@ -9,7 +9,7 @@ Full 1:1 compatibility is **not established**. A matching directory layout, file
 - Current continuation branch: `port/parity-ci`.
 - Existing conversion ledgers are historical inventories; their 100% claims are not a verified baseline.
 
-## Current continuation work
+## Earlier validated work
 
 | Area | Work | Verification status |
 | --- | --- | --- |
@@ -19,6 +19,27 @@ Full 1:1 compatibility is **not established**. A matching directory layout, file
 | Routing | Shared ordered conditions across both router interfaces; lazy cached DNS and retry semantics; fallback-tag handling; matcher/CIDR corrections; bounded round-robin state. | The 40 added regression tests, including Go-derived vectors, passed in the combined Linux run at `dc4e878`. |
 | Protocol sniffing | Authenticate/decrypt QUIC Initial packets (draft-29/v1/v2), bounded CRYPTO reassembly, stricter TLS/SNI parsing, and production dispatcher integration. | All eight captured fixtures match adjacent Go sources byte-for-byte. Go QUIC reference tests and the combined Rust Linux run at `dc4e878` passed, including corrected SNI length tests. |
 | CLI | Shared command parser, Go-style flags, actual TLS certificate/probe operations, UUIDv5 input, and explicit errors for unimplemented API/YAML/TOML behavior. | Parser, key/certificate, TLS loopback, UUID, file, and failure-path tests passed in the combined Linux run at `dc4e878`. |
+
+## Current integrated protocol snapshot
+
+Integrated source `517a155` passed Ubuntu all-target checking and debug/release builds. Full protocol parity is not established: ordinary tests and required live gates found failures. Targeted follow-up fixes are being collected for the next Linux run. The frozen integration includes authenticated VMess, REALITY hooks, the mKCP runtime, encrypted BoringTun/smoltcp WireGuard, QUIC/H3 Hysteria, extended SS2022 codecs, native listeners/datagrams, bounded multiplex dispatch, and root configuration/policy/services. See `md/PARITY_MATRIX.md` for current call paths, historical findings and remaining work.
+
+- First combined source `584cd13` failed Ubuntu Rust CI run `45892518490` on missing SS2022 dependency and configuration/REALITY/Hysteria API issues. The live jobs stopped at compilation; none established interoperability.
+- Fixes through `c92390f` include the latest reviewed `shadowsocks-crypto 0.8.0`, Linux-resolved lock from run `45893018658`, native protobuf map conversion, task ownership, REALITY type annotation, hash encoding, and duplicate test registration. Recheck run `45893215688` found probe URL inference plus a release-only unnecessary mutable binding; `7463794` corrects those reports.
+- `517a155` includes multiplex generation/close fixes, native packet routing tests, and all 12 independently generated Go Mux records. Ubuntu Rust CI `45893541120` passed all-target check and debug/release builds. Its library suite finished with **1,120 passed / 8 failed / 13 ignored**; executable tests passed 4/4. The subsequent key-command comparison and documentation-test steps were skipped after failure.
+- The eight library failures are native protobuf port ranges, level-one default policy, VMess UDP fragmentation shutdown, two WireGuard UDP cases, and three REALITY cases. All Mux runtime tests (including the 12-record independent comparison), KCP tests, SS2022 tests and Hysteria ordinary tests passed in that same suite; those scoped results do not turn the overall run green.
+- Protocol workflow `45893541110` executed all required cases: **REALITY 1 passed / 2 failed; WireGuard 3 passed / 5 failed; Hysteria 1 passed / 1 failed**. Strict all-target Clippy reported 20 errors. Passing live cases are limited to their exact scenarios; no full-engine live gate passed.
+- All eight independent Go reference jobs passed in run `45893018590`: config, Hysteria, KCP, Mux, REALITY, SS2022, VMess and WireGuard. Peer-helper builds are Go-side evidence; they do not validate Rust engines. SS2022 extended records were frozen from successful job `140158378278` in run `45892518463`.
+- The protocol workflow requires at least three REALITY, eight WireGuard and two Hysteria live tests, with no ignored or zero-test success. Mandatory frozen-byte tests remain unconditional. The native/Freedom/Mux tests executed; scoped successes and engine failures are distinguished above.
+- Dependencies now contain 73 direct entries across both manifests (70 unique packages). The earlier 72-entry dependency-branch pass is revision-scoped and does not validate the later engines or new SS2022 dependency.
+- Follow-up source through `089fd8e` fixes strict-lint reports, Hysteria TCP/QUIC teardown, protobuf port range names, the Go level-one policy override, and WireGuard readiness logging/IPv6 ingress reassembly. `1ec1a9c` routes executable JSONC/YAML/TOML/protobuf input through the shared byte loader. These changes and `e811ca8`'s mandatory SS2022 fixture hash still await the next Linux run; no earlier PASS is assigned to them.
+
+## Current cryptography and lifecycle continuation
+
+- Cryptographic utilities now generate actual ML-KEM-768 keys from the Go-compatible 64-byte seed, return the full 1184-byte encapsulation key, and use BLAKE3 for Hash32. X25519 now prints the clamped private key and Go output labels. The shared executable dispatch uses these implementations, including the existing VLESS encryption utility caller.
+- Checkpoint `81c18a1` passed Linux [run 45886462115](https://github.com/fucypie-ui/xray-rust/actions/runs/45886462115): **910 library tests and 3 binary tests passed**, with 15 built-CLI comparisons against independent Go fixtures, locked all-target checks, debug/release builds, and the documentation command (zero runnable doc tests). Further argument-grammar fixes and the combined SS2022/lifecycle changes are not covered by this checkpoint.
+- Pinned Go fixture generation passed [run 45885788457](https://github.com/fucypie-ui/xray-rust/actions/runs/45885788457) using Go 1.27.4 and source `67756b3`. Regeneration also passed at `81c18a1` in [run 45886462164](https://github.com/fucypie-ui/xray-rust/actions/runs/45886462164), including byte-for-byte comparison of the frozen key fixtures. See `testing/REFERENCE_FIXTURES.md` for provenance, hashes and regeneration instructions.
+- SS2022 now includes AES/ChaCha TCP, identity-chain/relay codecs and UDP session primitives. Its extended Go fixtures and Rust comparisons passed at `517a155`; native UDP runtime wiring and a successful overall Rust run remain open.
 
 ## Build and test coverage
 
@@ -30,7 +51,7 @@ The integrated source at `9c15663` passed all-target checks and debug/release bu
 
 The corrected combined checkpoint, `dc4e878`, passed [run 45883176927](https://github.com/fucypie-ui/xray-rust/actions/runs/45883176927): **884 library tests and 3 binary tests passed, 0 failed**, with no ignored or filtered tests. Locked all-target checks, debug/release builds, and the documentation-test command also passed; the current documentation suite contains zero runnable tests. This run includes DNS/SOCKS, routing, CLI, authenticated QUIC/TLS sniffing, and the SNI test correction, but predates the additional DoH authentication/framing fixes.
 
-The final code checkpoint for this batch, `11ef08e`, passed [run 45883644317](https://github.com/fucypie-ui/xray-rust/actions/runs/45883644317): **897 library tests and 3 binary tests passed, 0 failed**, with no ignored or filtered tests. All 13 additional DoH tests passed. Locked all-target checks, debug/release library and binary builds, and the documentation-test command passed on Ubuntu 24.04; the documentation suite still contains zero runnable tests. This checkpoint validates all code changes in this batch together.
+The final code checkpoint for the preceding batch, `11ef08e`, passed [run 45883644317](https://github.com/fucypie-ui/xray-rust/actions/runs/45883644317): **897 library tests and 3 binary tests passed, 0 failed**, with no ignored or filtered tests. All 13 additional DoH tests passed. Locked all-target checks, debug/release library and binary builds, and the documentation-test command passed on Ubuntu 24.04; the documentation suite still contains zero runnable tests. This checkpoint validates all code changes in that batch together.
 
 `.github/workflows/ci.yml` runs on pushes, pull requests, and manual dispatch:
 
@@ -42,22 +63,16 @@ Rust is not installed and builds are not performed on the local Android device, 
 
 ## Confirmed open work
 
-These findings are based on source comparisons. They are not live interoperability test results. P0 items prevent claiming protocol compatibility or equivalent authentication.
+The production engines below are integrated source, with remaining behavior and validation gaps. Historical plaintext/substitute findings are preserved in the matrix's baseline column; they do not describe the new implementation.
 
-| Priority | Area and evidence | Next bounded implementation |
+| Priority | Area | Next required result |
 | --- | --- | --- |
-| P0 | VMess: `proxy/vmess/encoding/encoding.rs` writes a plaintext UUID/header, and inbound/outbound return the raw stream. Go uses AEAD sessions in `proxy/vmess/encoding/client.go` and `server.go`. | Implement authenticated request/response headers, then body encryption/framing, with Go-to-Rust and Rust-to-Go tests. |
-| P0 | REALITY: the configured VLESS client uses ordinary TLS with insecure certificate acceptance; `auth_client_hello` is not on that path. The server creates a normal self-signed certificate. See `proxy/vless/outbound/outbound.rs`, `transport/internet/reality/reality.rs`, and Go's `transport/internet/reality/reality.go`. | Integrate actual ClientHello session-ID authentication, key-share handling, and AuthKey-bound certificate verification. |
-| P0 | Shadowsocks 2022: `proxy/shadowsocks_2022/protocol.rs` writes an unencrypted alternate header; configured Shadowsocks still selects legacy handlers. Go's `proxy/shadowsocks_2022/stream.go` derives subkeys and seals headers/chunks. | Implement single-user AES-2022 TCP salt/KDF/header/chunk processing and method selection, then EIH/relay/UDP. |
-| P0 | WireGuard: `proxy/wireguard/client.rs` sends application bytes directly over UDP, without a WireGuard device, handshake, or tunnel stack. The runtime config model also misses standard camelCase key fields. | Correct config mapping, then connect a real WireGuard device and userspace IP stack before advertising tunnel support. |
-| P0 | Hysteria: `proxy/hysteria/client.rs` opens TCP; `transport/internet/hysteria/` contains transport/counter scaffolding instead of the Go QUIC and HTTP/3 authentication path. | Establish real QUIC plus HTTP/3 authentication and one TCP stream before UDP/congestion-control work. |
-| P0 | ML-KEM: `main/commands/all/mlkem768.rs` hashes a seed instead of generating an ML-KEM key pair. | Use a real algorithm implementation and authoritative known-answer tests. |
-| P1 | mKCP: `transport/internet/kcp/listener.rs` has no receive/demultiplex loop, and connections require manually driven input/flush. | Add session acceptance, timed retransmission, a blocking async stream adapter, and config integration. |
-| P1 | Root configuration: `infra/conf/conf.rs` omits executable wiring for policy, API, metrics, stats, reverse, and observatory settings present in Go's root builder. | Connect policy from JSON through registered features and real session use, then complete the remaining app slices. |
-| P1 | Lifecycle: `core/xray.rs` does not retain/cancel all listener tasks, start/close every registered feature, or defer unresolved feature dependencies as Go does. | Implement complete shutdown with owned handles/cancellation, then deferred dependency resolution. |
-| P1 | Protobuf: `core/config.rs` registers the JSON loader under the protobuf format. | Decode real protobuf and convert it into executable configuration. |
-| P1 | DNS-over-QUIC: `app/dns/nameserver_quic.rs` now returns an explicit unimplemented error; no QUIC connection is established. | Implement a real DoQ connection and wire query path with a local QUIC test peer. |
-| P1 | YAML/TOML: real decoders and loader integration remain absent. | Implement actual format conversion and equivalent validation; explicit unsupported errors are preferable to accepting JSON under another format name. |
+| P0 | Combined Linux validation | All-target check and debug/release builds passed at `517a155`. Fix the eight library failures and 20 Clippy errors, then repeat all checks on one exact integration revision. |
+| P0 | VMess, REALITY, WireGuard and Hysteria | Pass independent byte fixtures plus nonempty live pinned-Go gates. VMess still needs anti-probing drainer parity; REALITY advanced fingerprint/ML-DSA/spider behavior, WireGuard dynamic/platform APIs, and Hysteria Brutal remain incomplete. |
+| P0 | Shadowsocks | Extended SS2022 assertions passed at `517a155`; finish native UDP/relay binding and live peers. Classic Shadowsocks still requires its own encrypted runtime review. |
+| P1 | mKCP and multiplex | Go-frame/trace and native/loss/cancellation tests passed at `517a155`; add live Go mKCP sessions and broader multiplex interoperability. KCP seed/header settings follow current Go's raw no-op behavior unless an explicit finalmask selects a legacy codec. |
+| P1 | Binary config and root services | Shared byte-loader dispatch is integrated at `1ec1a9c` and awaits its Linux executable tests. Complete remaining CLI merge/source/flag semantics, RPC/reflection/API CLI methods, advanced FakeDNS, environment/geodata and observatory routing. |
+| P1 | Remaining transports, masks, routing and platform options | Work through every current matrix row, including MASQUE, XDrive, gRPC/XHTTP composition, TLS/ECH options, DNS-over-QUIC and socket/OS behavior. |
 
 ## Remaining gaps in this batch
 
@@ -65,6 +80,6 @@ These findings are based on source comparisons. They are not live interoperabili
 - DNS: negative/per-family caching, in-flight query coalescing, stale background refresh, real DoQ, and routed UDP integration tests. Malformed partial answers are rejected more strictly than Go's current parser.
 - Routing: attributes/local-IP/local-port/VLESS-route conditions, external geodata validation, negative-CIDR unions, outbound-manager candidate selection, and complete observatory/least-load semantics.
 - Sniffing: complete HTTP/domain-address parity, encrypted draft-29 fixture coverage, typed need-more-data errors, and non-UTF-8 SNI representation. The shared sniffer does not retain Go's per-connection candidate pruning; dispatcher buffering remains TLS-specific, so fragmented QUIC currently needs accumulated datagrams from its caller.
-- CLI: real gRPC API transport, complete config-loading/exit-code parity, uTLS fingerprints/PQ reporting, and other utilities. Certificate durations currently require positive values capped at 100 years. `curve25519.rs` still computes Hash32 with SHA-256 rather than Go's BLAKE3.
+- CLI: real gRPC API transport, complete config-loading/exit-code parity, uTLS fingerprints/PQ reporting, and other utilities. Certificate durations currently require positive values capped at 100 years.
 
-Passing checkpoints above describe their exact commits. This report update changes documentation only; its code is identical to the validated `11ef08e` checkpoint. The open protocol/runtime gaps above remain unverified or incomplete.
+Passing checkpoints above describe their exact commits. Later unvalidated work must not be attributed to an earlier passing checkpoint. The remaining protocol/runtime gaps above still prevent a full 1:1 compatibility claim.

@@ -1009,6 +1009,20 @@
       "rust_version": null,
       "source": "https://crates.io/api/v1/crates/go-parse-duration",
       "checked_at": "2026-11-26T20:22:18.390141+00:00"
+    },
+    {
+      "manifest": "Cargo.toml",
+      "section": "dependencies",
+      "alias": "shadowsocks-crypto",
+      "crate": "shadowsocks-crypto",
+      "previous_requirement": "new (SS2022 engine integration)",
+      "requirement": "0.8.0",
+      "latest_stable": "0.8.0",
+      "yanked": false,
+      "published_at": "2026-08-26T18:13:19.682516Z",
+      "rust_version": "1.85",
+      "source": "https://crates.io/api/v1/crates/shadowsocks-crypto",
+      "checked_at": "2026-11-26T20:48:07.531Z"
     }
   ],
   "replaced_dependencies": [
