@@ -290,7 +290,14 @@ async fn runtime_udp_datagrams_remain_separate_under_fragmentation() {
             });
             client.send_packet(&first).await.unwrap();client.send_packet(&second).await.unwrap();
             assert_eq!(client.recv_packet().await.unwrap(),Some(first));assert_eq!(client.recv_packet().await.unwrap(),Some(second));
-            assert_eq!(client.recv_packet().await.unwrap(),None);task.await.unwrap();
+            assert_eq!(client.recv_packet().await.unwrap(),None);
+            // Go common/crypto/auth.go:167 returns EOF before the terminal tag
+            // and padding. Drain them only after protocol EOF so duplex(32)
+            // lets the peer finish shutdown rather than blocking on its tail.
+            let mut transport=client.into_inner();
+            let trailing=tokio::io::copy(&mut transport,&mut tokio::io::sink()).await.unwrap();
+            assert_eq!(trailing,41,"protocol EOF must leave the terminal tag (16) and fixture padding (25) unread");
+            task.await.unwrap();
         }
     }).await.expect("VMess UDP loopback deadlock");
 }

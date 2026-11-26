@@ -46,6 +46,9 @@ impl VmessStream {
     }
     pub fn with_termination_signal(mut self, enabled: bool) -> Self {self.termination_signal=enabled;self}
     pub fn into_boxed(self) -> BoxStream {Box::pin(self)}
+    /// Returns the transport, discarding buffered data without flushing.
+    /// Protocol EOF leaves the terminal frame's tag and padding unread, as in Go.
+    pub fn into_inner(self) -> BoxStream {self.inner}
     pub fn is_packet(&self) -> bool {self.writer.is_packet()}
     pub async fn send_packet(&mut self, packet: &[u8]) -> Result<()> {
         if !self.writer.is_packet() {return Err(Error::Protocol("VMess session is not UDP".into()));}
