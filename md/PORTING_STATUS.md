@@ -20,7 +20,39 @@ Full 1:1 compatibility is **not established**. A matching directory layout, file
 | Protocol sniffing | Authenticate/decrypt QUIC Initial packets (draft-29/v1/v2), bounded CRYPTO reassembly, stricter TLS/SNI parsing, and production dispatcher integration. | All eight captured fixtures match adjacent Go sources byte-for-byte. Go QUIC reference tests and the combined Rust Linux run at `dc4e878` passed, including corrected SNI length tests. |
 | CLI | Shared command parser, Go-style flags, actual TLS certificate/probe operations, UUIDv5 input, and explicit errors for unimplemented API/YAML/TOML behavior. | Parser, key/certificate, TLS loopback, UUID, file, and failure-path tests passed in the combined Linux run at `dc4e878`. |
 
-## Current integrated protocol snapshot
+## Latest executed Linux snapshot: 98f42c8
+
+Native SS2022/config integration `98f42c8419bdd75893de2b99f3c422f7c1a7b5a1` passed Rust CI `45897222837`: locked all-target checking, debug/release builds, **1,151 library tests passed / 0 failed / 15 ignored**, **9 binary tests passed**, **15 built-CLI comparisons**, and the documentation command (zero runnable tests). All eight new native tests and five new configuration cases executed. Same-revision workflow `45897222798` passed strict all-target Clippy and all 15 required live cases: REALITY 3/3, WireGuard 8/8, Hysteria 2/2 and mKCP 2/2, with zero ignored in those gates. The independent-byte test at the production SS2022 handler boundary uses frozen Go packets, not a live Go peer.
+
+The preceding complete checkpoint `fd2d231005e8d518e9b3cf76816e79cd2f33a92b` passed all three workflows: Rust CI `45896822590` (**1,138 library / 9 binary / 15 CLI comparisons**, zero failures; 15 ordinary ignored live cases), protocol interoperability `45896822633` (**REALITY 3/3, WireGuard 8/8, Hysteria 2/2, mKCP 2/2**, all 15 executed with zero ignored, plus strict all-target Clippy), and all eight independent Go-reference jobs `45896822491`. The mKCP gate exercises both directions at MTUs 1350 and 200, exact binary fragmentation, EOF, post-close writes and terminal state. It establishes those scenarios, not all mKCP options or protocol composition.
+
+SS2022 native relay UDP remains unsupported. The native queue/flow/address/idle bounds and one logical source per outbound association are not policy parity. A live Go SS2022 gate is being added separately. Classic Shadowsocks source/configuration and its reviewed engine dependency remain separate, uncommitted integration work. The isolated `port/classic-engine-lock` branch prepares a Linux-generated lock only; it is not a runtime parity checkpoint.
+
+Evidence directories: `/data/data/com.termux/files/usr/tmp/opencode/combined-98f42c8/` and `/data/data/com.termux/files/usr/tmp/opencode/combined-fd2d231/`, including complete logs and exact-SHA result JSON.
+
+## Previous executed Linux snapshot: d977720
+
+Rust CI `45896320540` succeeded at `d97772052d4d154bd2403f6d5fa59ed95d911f24`: locked all-target checking, debug/release builds, **1,138 library tests passed / 0 failed / 15 ignored**, **9 binary tests passed**, and **15 built-CLI comparisons** against pinned Go output. The documentation-test command passed with zero runnable tests. The VMess UDP fragmentation/EOF regression passed while retaining both ciphers, duplex capacity 32 and the 10-second timeout.
+
+Interop `45896320441` again passed **REALITY 3/3, WireGuard 8/8, Hysteria 2/2 and strict Clippy**. Its two new mKCP cases executed but failed strict readiness JSON parsing because production Go diagnostics appeared on stdout. The full interoperability workflow therefore failed, and mKCP live sessions remain unproved. All eight independent Go-reference jobs passed in `45896320504`. The 15 ordinary ignored tests are required separately by live gates; they are not ordinary passes.
+
+Helper logging correction `fd2d231005e8d518e9b3cf76816e79cd2f33a92b` subsequently passed the complete gates recorded above. Native SS2022 integration `98f42c8` subsequently passed ordinary Linux CI: actual BoxDatagram outbound, single-user/AES multi-user network-selective native listeners, cancellation/socket cleanup, eight native tests and five configuration tests. No live Go SS2022 gate exists yet. Classic Shadowsocks remains separate uncommitted work.
+
+Raw evidence: `/data/data/com.termux/files/usr/tmp/opencode/combined-d977720/`, including complete CI/interop/reference logs and result JSON. Source freezes and helper builds are kept distinct from executed engine evidence.
+
+## Previous executed Linux snapshot: cf9510e
+
+Revision `cf9510e4a5c98607ba5ae8e8efd32ad9891ab833` passed locked all-target checking and debug/release builds in Rust CI `45895829517`. The ordinary library suite executed **1,137 passed / 1 failed / 13 ignored**; binary tests passed **9/9**, including the shared byte-loader regressions for JSONC/YAML/TOML/protobuf. The only library failure was `proxy::vmess::reference_test::runtime_udp_datagrams_remain_separate_under_fragmentation`: a 10-second teardown timeout. Key-command comparison and documentation steps remained skipped, so full Rust CI failed.
+
+Protocol interoperability run `45895829521` succeeded at the same revision: **REALITY 3/3, WireGuard 8/8, Hysteria 2/2**, with all 13 selected cases actually executed and zero ignored within those gates. Strict all-target Clippy passed. These results validate the represented engine scenarios, including authenticated REALITY exchanges, WireGuard dual-stack fragmentation and Hysteria teardown; broader configuration, options, routing and protocol composition remain partial.
+
+Source `d97772052d4d154bd2403f6d5fa59ed95d911f24` has been pushed for a new Linux run. It preserves Go's VMess EOF rule and drains the remaining raw terminal tail in the bounded-duplex regression before awaiting peer teardown. It also includes `480560d`'s two required bidirectional live pinned-Go mKCP tests at MTUs 1350 and 200. Protocol run `45896320441` executed both new mKCP cases but failed readiness parsing because Go diagnostics preceded JSON on stdout; session interoperability is still unproved. The other 13 live cases and strict Clippy passed again. Ordinary CI `45896320540` subsequently succeeded as recorded above. The live workflow now requires 15 cases across four engines. mKCP full-close semantics remain distinct from TCP half-close.
+
+SS2022 native UDP/configuration and classic Shadowsocks runtime changes were excluded from that tested snapshot; the following SS2022 source integration is recorded above. SS2022 omitted/null JSON selects TCP; an empty JSON array produces an empty native list, whose constructor default selects TCP+UDP. Go folds network-token case without trimming whitespace. Unknown/Unix network selections and relay UDP remain explicitly unsupported in the pending Rust integration.
+
+Raw evidence: `/data/data/com.termux/files/usr/tmp/opencode/combined-cf9510e/ci-clean.log` and `interop-full-clean.log`, with corresponding job-result JSON. Earlier results below are historical and do not replace this revision-scoped evidence.
+
+## Earlier integrated protocol snapshot: 517a155
 
 Integrated source `517a155` passed Ubuntu all-target checking and debug/release builds. Full protocol parity is not established: ordinary tests and required live gates found failures. Targeted follow-up fixes are being collected for the next Linux run. The frozen integration includes authenticated VMess, REALITY hooks, the mKCP runtime, encrypted BoringTun/smoltcp WireGuard, QUIC/H3 Hysteria, extended SS2022 codecs, native listeners/datagrams, bounded multiplex dispatch, and root configuration/policy/services. See `md/PARITY_MATRIX.md` for current call paths, historical findings and remaining work.
 
@@ -39,7 +71,7 @@ Integrated source `517a155` passed Ubuntu all-target checking and debug/release 
 - Cryptographic utilities now generate actual ML-KEM-768 keys from the Go-compatible 64-byte seed, return the full 1184-byte encapsulation key, and use BLAKE3 for Hash32. X25519 now prints the clamped private key and Go output labels. The shared executable dispatch uses these implementations, including the existing VLESS encryption utility caller.
 - Checkpoint `81c18a1` passed Linux [run 45886462115](https://github.com/fucypie-ui/xray-rust/actions/runs/45886462115): **910 library tests and 3 binary tests passed**, with 15 built-CLI comparisons against independent Go fixtures, locked all-target checks, debug/release builds, and the documentation command (zero runnable doc tests). Further argument-grammar fixes and the combined SS2022/lifecycle changes are not covered by this checkpoint.
 - Pinned Go fixture generation passed [run 45885788457](https://github.com/fucypie-ui/xray-rust/actions/runs/45885788457) using Go 1.27.4 and source `67756b3`. Regeneration also passed at `81c18a1` in [run 45886462164](https://github.com/fucypie-ui/xray-rust/actions/runs/45886462164), including byte-for-byte comparison of the frozen key fixtures. See `testing/REFERENCE_FIXTURES.md` for provenance, hashes and regeneration instructions.
-- SS2022 now includes AES/ChaCha TCP, identity-chain/relay codecs and UDP session primitives. Its extended Go fixtures and Rust comparisons passed at `517a155`; native UDP runtime wiring and a successful overall Rust run remain open.
+- SS2022 now includes AES/ChaCha TCP, identity-chain/relay codecs and UDP session primitives. Its extended Go fixtures and Rust comparisons passed at `517a155`; native UDP runtime wiring and the overall ordinary suite subsequently passed at `98f42c8`; live Go SS2022 and relay UDP remain open.
 
 ## Build and test coverage
 
@@ -67,11 +99,11 @@ The production engines below are integrated source, with remaining behavior and 
 
 | Priority | Area | Next required result |
 | --- | --- | --- |
-| P0 | Combined Linux validation | All-target check and debug/release builds passed at `517a155`. Fix the eight library failures and 20 Clippy errors, then repeat all checks on one exact integration revision. |
-| P0 | VMess, REALITY, WireGuard and Hysteria | Pass independent byte fixtures plus nonempty live pinned-Go gates. VMess still needs anti-probing drainer parity; REALITY advanced fingerprint/ML-DSA/spider behavior, WireGuard dynamic/platform APIs, and Hysteria Brutal remain incomplete. |
-| P0 | Shadowsocks | Extended SS2022 assertions passed at `517a155`; finish native UDP/relay binding and live peers. Classic Shadowsocks still requires its own encrypted runtime review. |
-| P1 | mKCP and multiplex | Go-frame/trace and native/loss/cancellation tests passed at `517a155`; add live Go mKCP sessions and broader multiplex interoperability. KCP seed/header settings follow current Go's raw no-op behavior unless an explicit finalmask selects a legacy codec. |
-| P1 | Binary config and root services | Shared byte-loader dispatch is integrated at `1ec1a9c` and awaits its Linux executable tests. Complete remaining CLI merge/source/flag semantics, RPC/reflection/API CLI methods, advanced FakeDNS, environment/geodata and observatory routing. |
+| P0 | Combined Linux validation | Complete gates passed at `fd2d231`, including all 15 live cases. Native SS2022 ordinary CI passed at `98f42c8` (1,151 library/9 binary); all 15 existing live cases and strict Clippy passed on that same revision. |
+| P0 | VMess, REALITY, WireGuard and Hysteria | Preserve the 13 passing REALITY/WireGuard/Hysteria live cases at `cf9510e`; complete broader independent and configured-runtime acceptance. VMess still needs anti-probing drainer parity; REALITY advanced fingerprint/ML-DSA/spider behavior, WireGuard dynamic/platform APIs, and Hysteria Brutal remain incomplete. |
+| P0 | Shadowsocks | SS2022 native/config passed ordinary CI at `98f42c8`; finish relay UDP and live SS2022 peers. Classic encrypted runtime/config and its new engine lock remain separate and unvalidated. |
+| P1 | mKCP and multiplex | Both required live mKCP tests passed at `fd2d231`; preserve full-close/EOF behavior and extend option/multiplex interoperability. KCP seed/header settings follow current Go's raw no-op behavior unless an explicit finalmask selects a legacy codec. |
+| P1 | Binary config and root services | Shared byte-loader dispatch from `1ec1a9c` passed all nine binary tests at `cf9510e`. Complete remaining CLI merge/source/flag semantics, RPC/reflection/API CLI methods, advanced FakeDNS, environment/geodata and observatory routing. |
 | P1 | Remaining transports, masks, routing and platform options | Work through every current matrix row, including MASQUE, XDrive, gRPC/XHTTP composition, TLS/ECH options, DNS-over-QUIC and socket/OS behavior. |
 
 ## Remaining gaps in this batch

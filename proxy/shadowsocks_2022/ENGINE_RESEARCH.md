@@ -29,15 +29,22 @@ features/{inbound,outbound}:
 - InboundHandler::dispatch_connection(stream, remote, Arc<dyn InboundDispatcher>),
   plus bind_native and NativeInboundListener for UDP binding/lifecycle.
 
-The first expanded source snapshot deliberately does not change these contracts.
-After remote compilation, adapt UdpAssociation to BoxDatagram and bind the
-concrete Server/MultiUserServer decode/reply APIs through native inbound packet
-listeners. Keep the opaque ReplyToken per live association. Relay routing needs
-a per-client session route whose responses bypass SS2022 body encoding. Its
-RelayDatagram carries the next-hop destination, session ID, user and raw wire.
-Use bounded queues and preserve one packet per send/recv. Explicit close and
-cancellation must release sockets and listener children. Native UDP config stays
-rejected until this binding exists; no stream-read packet inference is permitted.
+Source 98f42c8 preserves these shared contracts and implements BoxDatagram over
+UdpAssociation plus single-user/AES multi-user native listeners. It reuses the
+reviewed PacketCodec and ClientUdpSession, shares accounts/replay/session state
+across listener clones and retains an opaque ReplyToken per flow. Packet source
+and destination, whole-packet queues, cancellation and socket release have new
+regressions passed Linux CI 45897222837 at 98f42c8. No new engine/dependency
+was needed.
+
+Relay routing still needs a per-client session route whose responses bypass
+SS2022 body encoding. RelayDatagram carries the next-hop destination, session
+ID, user and raw wire. Network selections containing UDP fail explicitly for
+relay configurations. Unknown/Unix networks also remain unsupported; Go network
+case-folding is preserved without whitespace trimming. The fixed 256-flow,
+32-packet queue, 64-remote-address and 500-second idle bounds are not full policy
+parity. Native None defaults to both networks; JSON omitted/null is TCP and []
+selects both. No stream-read packet-boundary inference is used.
 
 Generic mux/UOT/wrappers are a later shared-runtime chunk after the initial
 compile. The pinned Go SS2022 outbound chooses TCP/UDP from the requested target
@@ -54,6 +61,10 @@ full library suite failed in eight other tests; no live SS2022 peer gate ran.
 The three-record fixture and provenance were frozen at 1ea1cf2 with SHA-256
 349343ccb3730746d51afa5bfef25470d7184fccc9476eeeb8343c81278fb9b0.
 Commit e811ca8 adds its unconditional digest check before decoding; that
-new check awaits remote execution. README.md and ../../md/PORTING_STATUS.md
-record the remaining native UDP integration and runtime limits. The original
+new check passed at cf9510e and d977720. Rust CI 45896320540 at d977720
+passed 1,138 library and nine binary tests, checking and debug/release builds.
+The 98f42c8 native extension passed eight native/five config cases in Linux
+Rust CI 45897222837 (1,151 library/nine binary tests and 15 CLI comparisons);
+no live Go SS2022 session evidence is claimed. README.md and
+../../md/PORTING_STATUS.md record the remaining runtime limits. The original
 AES fixture, Go helper and generator have not changed.

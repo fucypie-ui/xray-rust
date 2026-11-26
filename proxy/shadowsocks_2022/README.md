@@ -1,11 +1,13 @@
 # Shadowsocks 2022 implementation status
 
 The wire reference is adjacent Go Xray-core commit
-67756b3674d56b72c7a7e675e8dcd3f883e1b2f7. The original AES single-user TCP
-checkpoint has independent Go fixtures. The expanded implementation below is
-**built in debug/release and passed its SS2022 tests in Linux run 45893541120
-at 517a155**. The full library suite failed elsewhere (1,120 passed / 8 failed),
-and no live SS2022 Go/Rust gate ran. This is not complete Shadowsocks 2022 parity.
+67756b3674d56b72c7a7e675e8dcd3f883e1b2f7. The expanded implementation,
+including native UDP/configuration source 98f42c8, passed Linux Rust CI
+45897222837: **1,151 library/nine binary tests**, locked checking,
+debug/release builds and 15 CLI comparisons. All eight new native and five
+configuration cases executed. Workflow 45897222798 passed strict Clippy and
+the existing 15 REALITY/WireGuard/Hysteria/mKCP live cases. No live SS2022
+Go/Rust gate has run; full SS2022 parity remains open.
 
 ## TCP runtime
 
@@ -50,8 +52,11 @@ Implemented TCP paths:
   output progress and independent split-task wakeups. Flush or shut down an
   output-only stream before dropping it.
 
-Inbound JSON uses method/password, optional network: "tcp", and optional users
-or clients. Each user has password, email and level; relay entries also have
+Inbound JSON uses method/password, optional network as a string or string array,
+and optional users or clients. Omitted/null JSON selects TCP; [] reaches the
+native constructor default of TCP+UDP. Case, order and duplicates do not change
+selection; whitespace is not trimmed, following Go Network.Build. Unknown/Unix
+values are explicitly unsupported in this Rust runtime. Each user has password, email and level; relay entries also have
 address and port. As in Go, clients overrides users, including an empty clients
 array, and the first selected user's address chooses relay mode. User method
 must be empty. ChaCha rejects PSK chains, multi-user and relay mode.
@@ -63,8 +68,8 @@ email and level now survive into session metadata.
 
 ## UDP codec and association
 
-Concrete UDP APIs exist, but **configuration still rejects native UDP until the
-new shared native listener/dispatcher contract is connected and tested**:
+Source 98f42c8 connects the existing codecs to the shared runtime. All eight
+new native and five new config tests passed ordinary Linux CI 45897222837:
 
 - Server::decode_datagram / reply_datagram and the equivalent MultiUserServer
   methods authenticate whole packets, preserve destinations and return an
@@ -75,12 +80,17 @@ new shared native listener/dispatcher contract is connected and tested**:
   destination. Responses must pass through unchanged. The shared listener must
   cache and close the per-client relay route; the stateless codec is not that
   listener.
-- Client::connect_datagram currently exposes a concrete UdpAssociation with
-  packet-preserving send/receive, system DNS integration and no bridge tasks.
-  It has not yet overridden OutboundHandler::connect_datagram. The next chunk
-  must adapt this to common::net::datagram::DatagramTransport / BoxDatagram,
-  including close/cancellation semantics, then wire inbound bind_native and
-  packet dispatch. Never flatten packet boundaries into BoxStream reads.
+- OutboundHandler::connect_datagram returns a real BoxDatagram adapter around
+  UdpAssociation. It selects UDP from the session destination even when server
+  endpoint metadata says TCP, preserving one whole packet per send/recv. Replies
+  retain the remote source and original local destination. Packet source takes
+  precedence over the session-source/local-socket fallback; mixed original
+  sources in one association are explicitly rejected.
+- Server and AES MultiUserServer implement bind_native: TCP-only returns None
+  for the shared TCP path, UDP-only binds one datagram socket, and TCP+UDP binds
+  both to the same port with rollback. Clones share replay/account/session state.
+  Handler close, listener/task drop and cancelled I/O release owned sockets and
+  wake packet operations, including retained transports and unpolled TCP tasks.
 - AES uses a separately encrypted 16-byte session/packet header and a session
   body key. UDP EIH uses raw AES keys and XOR with that header, unlike TCP EIH.
   ChaCha uses a 24-byte nonce and XChaCha20-Poly1305 over header and body.
@@ -92,10 +102,12 @@ new shared native listener/dispatcher contract is connected and tested**:
 
 ## Remaining runtime work and explicit differences
 
-- Native UDP bind/dispatch and the BoxDatagram outbound adapter are pending.
-  Omitted/null JSON network means TCP in pinned Go via NetworkList.Build(nil).
-  An empty native network list instead defaults to TCP+UDP in the Go SS2022
-  constructors; both entry paths need their own acceptance tests.
+- Native UDP and its configuration passed ordinary Linux CI at 98f42c8;
+  the same-revision existing live/Clippy gates passed. Native relay UDP still
+  needs a cached passthrough route and close lifecycle; selections containing UDP are rejected during configuration.
+- Native flow limits are fixed: 256 flows, 32 queued packets per flow, 64
+  authenticated remote addresses per flow and a 500-second idle limit. These
+  bounds and one original source per outbound association are not policy parity.
 - UDP-over-TCP and mux are not SS2022 cipher codecs in the pinned Go package.
   Its outbound JSON has no consumed uot setting. Generic mux, packet adaptation
   and stream wrappers belong to the shared runtime and need integration tests.
@@ -133,7 +145,8 @@ testdata/go-extended-vectors.jsonl with go-extended-provenance.json. SHA-256:
 They came from successful SS2022 job 140158378278 in run 45892518463
 (generator 584cd13, pinned Go source above, Go 1.27.4 linux/amd64).
 The byte comparisons passed at 517a155. Commit e811ca8 additionally makes
-the fixture hash mandatory before decoding; that change awaits the next run.
+the fixture hash mandatory before decoding; that check passed at cf9510e
+and d977720.
 The original two-argument ss2022-reference/generate.sh interface is unchanged.
 
 To repeat the SS2022 suite on the remote Linux runner:
@@ -145,5 +158,12 @@ cargo test --locked --lib ss2022_ -- --nocapture
 The additional tests cover ChaCha TCP half-close, relay-to-multi-user TCP,
 configuration dispatch, typed users/clients, UDP authentication/truncation,
 EIH routing, replay, packet-ID exhaustion, server-session rotation, reply-token
-lifetime, account indices and native UDP association loopback. No Go or Rust
-build, test, toolchain install or compilation was run locally for this lane.
+lifetime, account indices and native UDP association loopback. The extension
+adds eight native tests and five configuration tests covering real traits,
+empty/large packets, source metadata, network selection/rollback, replay and
+authenticated migration, queue isolation, account updates and socket release.
+One native test feeds frozen Go packets through production handler decoders at
+the recorded fixture time; this is independent-byte evidence, not a live peer.
+All 13 new tests executed and passed in Rust CI 45897222837 at 98f42c8.
+No Go or Rust build, test, toolchain install or compilation was run locally
+for this lane.
