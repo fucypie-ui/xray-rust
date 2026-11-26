@@ -12,17 +12,21 @@ impl Cidr {
         let mut parts = s.split('/');
         let ip_str = parts.next()?;
         let ip: IpAddr = ip_str.parse().ok()?;
+        let ip = ip.to_canonical();
         let prefix = match parts.next() {
-            Some(p) => p.parse::<u8>().ok()?,
-            None => match ip {
+            Some("") | None => match ip {
                 IpAddr::V4(_) => 32,
                 IpAddr::V6(_) => 128,
             },
+            Some(p) => p.parse::<u8>().ok()?,
         };
+        let max_prefix = if ip.is_ipv4() { 32 } else { 128 };
+        if parts.next().is_some() || prefix > max_prefix { return None; }
         Some(Self { ip, prefix })
     }
     pub fn contains(&self, target: &IpAddr) -> bool {
-        match (self.ip, target) {
+        // net.ParseAddress/netipx.FromStdIP treat IPv4-mapped IPv6 as IPv4.
+        match (self.ip, target.to_canonical()) {
             (IpAddr::V4(net), IpAddr::V4(tgt)) => self.prefix == 0 || (self.prefix <= 32 && {
                 let mask = !0u32 << (32 - self.prefix);
                 (u32::from_be_bytes(net.octets()) & mask) == (u32::from_be_bytes(tgt.octets()) & mask)
@@ -57,17 +61,28 @@ pub trait GeoIpMatcher: Send + Sync {
 pub struct HeuristicGeoIpMatcher {
     cidrs: Vec<Cidr>,
     reverse: bool,
+    has_ipv4: bool,
+    has_ipv6: bool,
 }
 
 impl HeuristicGeoIpMatcher {
-    pub fn new(cidrs: Vec<Cidr>, reverse: bool) -> Self { Self { cidrs, reverse } }
+    pub fn new(cidrs: Vec<Cidr>, reverse: bool) -> Self {
+        let has_ipv4 = cidrs.iter().any(|net| net.ip.is_ipv4() && net.prefix <= 32);
+        let has_ipv6 = cidrs.iter().any(|net| net.ip.is_ipv6() && net.prefix <= 128);
+        Self { cidrs, reverse, has_ipv4, has_ipv6 }
+    }
     pub fn toggle_reverse(&mut self) { self.reverse = !self.reverse; }
     pub fn set_reverse(&mut self, reverse: bool) { self.reverse = reverse; }
 }
 
 impl GeoIpMatcher for HeuristicGeoIpMatcher {
     fn matches_ip(&self, ip: &IpAddr) -> bool {
-        let is_contained = self.cidrs.iter().any(|net| net.contains(ip));
+        // Go's heuristic matcher never reverses an absent address family. An
+        // IPv4-only reverse set cannot match IPv6 (nor an empty set everything).
+        let ip = ip.to_canonical();
+        let has_family = if ip.is_ipv4() { self.has_ipv4 } else { self.has_ipv6 };
+        if !has_family { return false; }
+        let is_contained = self.cidrs.iter().any(|net| net.contains(&ip));
         if self.reverse {
             !is_contained
         } else {

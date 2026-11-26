@@ -1,7 +1,6 @@
 use super::balancing::Balancer;
-use super::condition::Rule;
+use super::condition::{Rule, SessionRoutingContext};
 use crate::common::errors::{Error, Result};
-use crate::common::net::Address;
 use crate::common::protocol::SessionContext;
 use crate::features::feature::{Feature, TYPE_ROUTER};
 use crate::features::routing::context::RoutingContext;
@@ -85,30 +84,55 @@ impl Router {
     pub fn r#type(&self) -> &'static str { TYPE_ROUTER }
     pub fn start(&self) -> Result<()> { Ok(()) }
     pub fn close(&self) -> Result<()> { Ok(()) }
-    fn session_domain(session: &SessionContext) -> Option<&str> {
-        session
-            .route_target
-            .as_ref()
-            .and_then(|d| match &d.address { Address::Domain(s) => Some(s.as_str()), _ => None })
-            .or(session.sniffed_domain.as_deref())
-            .or(match &session.destination.address { Address::Domain(s) => Some(s.as_str()), _ => None })
-            .or_else(|| session.original_destination.as_ref().and_then(|d| match &d.address { Address::Domain(s) => Some(s.as_str()), _ => None }))
-    }
     fn resolve_domain_ips(&self, domain: &str, port: u16) -> Vec<IpAddr> {
         if let Some(ref f) = self.ip_resolver {
-            let ips = f(domain);
-            if !ips.is_empty() { return ips; }
+            // An installed resolver is authoritative, including an empty/failed
+            // answer. Falling through to system DNS would bypass DNS policy.
+            return f(domain);
         }
         (domain, port).to_socket_addrs().map(|it| it.map(|sa| sa.ip()).collect()).unwrap_or_default()
     }
     fn resolve_rule_target<'a>(&'a self, rule: &'a Rule) -> Option<&'a str> {
-        if let Some(b) = rule.balancer_tag.as_ref().and_then(|t| self.balancers.get(t))
-            && let Some(picked) = b.pick()
-            && let Some(found) = b.candidates.iter().chain(&b.selectors).find(|s| **s == picked)
-        {
-            return Some(found.as_str());
+        if let Some(tag) = &rule.balancer_tag {
+            let balancer = self.balancers.get(tag)?;
+            let picked = balancer.pick()?;
+            return balancer.candidates.iter()
+                .chain(&balancer.selectors)
+                .chain(&balancer.fallback_tag)
+                .find(|s| **s == picked)
+                .map(String::as_str)
+                .or_else(|| balancer.strategy.fallback_tag().filter(|tag| *tag == picked));
         }
         (!rule.tag.is_empty()).then_some(rule.tag.as_str())
+    }
+    fn pick_rule(&self, context: &dyn RoutingContext) -> Option<&Rule> {
+        let mut cached_ips: Option<Vec<IpAddr>> = None;
+        let mut cached_proc = None;
+        let domain = context.get_target_domain()
+            .filter(|d| !d.is_empty() && !context.get_skip_dns_resolve());
+        let mut eval_pass = |with_dns: bool| {
+            for rule in &self.rules {
+                let target_ips = || {
+                    if with_dns && let Some(domain) = domain {
+                        cached_ips.get_or_insert_with(|| {
+                            let resolved = self.resolve_domain_ips(domain, context.get_target_port());
+                            if resolved.is_empty() { context.get_target_ips() } else { resolved }
+                        }).clone()
+                    } else {
+                        context.get_target_ips()
+                    }
+                };
+                if rule.matches_context(context, target_ips, &mut cached_proc) { return Some(rule); }
+            }
+            None
+        };
+        if let Some(rule) = eval_pass(self.domain_strategy == DomainStrategy::IpOnDemand) {
+            return Some(rule);
+        }
+        if self.domain_strategy == DomainStrategy::IpIfNonMatch && domain.is_some() {
+            return eval_pass(true);
+        }
+        None
     }
 }
 
@@ -118,104 +142,26 @@ impl Feature for Router {
 
 impl RouterFeature for Router {
     fn pick_outbound(&self, session: &SessionContext) -> Option<&str> {
-        let mut cached_ips: Option<Vec<IpAddr>> = None;
-        let mut cached_proc = None;
-        for rule in &self.rules {
-            let extra_ips: &[IpAddr] = if self.domain_strategy == DomainStrategy::IpOnDemand && !rule.ip_matchers.is_empty() {
-                if cached_ips.is_none() {
-                    cached_ips = Some(
-                        Self::session_domain(session)
-                            .map(|d| self.resolve_domain_ips(d, session.destination.port))
-                            .unwrap_or_default(),
-                    );
-                }
-                cached_ips.as_deref().unwrap_or(&[])
-            } else {
-                &[]
-            };
-            if rule.matches_with_cache(session, extra_ips, &mut cached_proc)
-                && let Some(target) = self.resolve_rule_target(rule)
-            {
-                return Some(target);
-            }
-        }
-        if self.domain_strategy == DomainStrategy::IpIfNonMatch
-            && let Some(domain) = Self::session_domain(session)
-        {
-            let ips = self.resolve_domain_ips(domain, session.destination.port);
-            if !ips.is_empty() {
-                for rule in &self.rules {
-                    if rule.matches_with_cache(session, &ips, &mut cached_proc)
-                        && let Some(target) = self.resolve_rule_target(rule)
-                    {
-                        return Some(target);
-                    }
-                }
-            }
-        }
-        self.default_tag.as_deref()
+        let context = SessionRoutingContext::new(session);
+        self.pick_rule(&context)
+            .and_then(|rule| self.resolve_rule_target(rule))
+            .or(self.default_tag.as_deref())
     }
 }
 
 #[async_trait]
 impl CoreRouterTrait for Router {
     async fn pick_route(&self, ctx: &dyn RoutingContext) -> Result<String> {
-        let in_tag = ctx.get_inbound_tag();
-        let target_port = ctx.get_target_port();
-        let target_domain = ctx.get_target_domain();
-        let target_ips = ctx.get_target_ips();
-        let net = ctx.get_network();
-        let proto = ctx.get_protocol();
-        let user = ctx.get_user();
-        let src_ips = ctx.get_source_ips();
-        let src_port = ctx.get_source_port();
-        let src_addr = (!src_ips.is_empty() && src_port > 0).then(|| std::net::SocketAddr::new(src_ips[0], src_port));
-        let is_tcp = net == crate::common::net::Network::Tcp;
-        let eval_pass = |ips: &[IpAddr]| -> Option<String> {
-            for rule in &self.rules {
-                if !rule.matches_local_os() { continue; }
-                if !rule.process.is_empty() && !rule.matches_process(src_addr, is_tcp) { continue; }
-                if !rule.inbound_tags.is_empty() && !rule.inbound_tags.iter().any(|t| t == in_tag) { continue; }
-                if rule.network.is_some_and(|r_net| r_net != net) { continue; }
-                if (!rule.ports.is_empty() || !rule.port_ranges.is_empty())
-                    && !rule.ports.contains(&target_port)
-                    && !rule.port_ranges.iter().any(|&(s, e)| (s..=e).contains(&target_port))
-                { continue; }
-                if (!rule.source_ports.is_empty() || !rule.source_port_ranges.is_empty())
-                    && !rule.source_ports.contains(&src_port)
-                    && !rule.source_port_ranges.iter().any(|&(s, e)| (s..=e).contains(&src_port))
-                { continue; }
-                if !rule.source_ip_matchers.is_empty()
-                    && !src_ips.iter().any(|ip| rule.source_ip_matchers.iter().any(|m| m.matches(ip)))
-                { continue; }
-                if !rule.protocols.is_empty() && !proto.is_some_and(|p| rule.matches_protocol(p)) { continue; }
-                if !rule.user_emails.is_empty() && !user.is_some_and(|u| rule.matches_user(u)) { continue; }
-                if !rule.domain_matchers.is_empty()
-                    && !target_domain.is_some_and(|d| rule.domain_matchers.iter().any(|m| m.matches(d)))
-                { continue; }
-                if !rule.ip_matchers.is_empty() && !ips.iter().any(|ip| rule.matches_destination_ip(ip)) {
-                    continue;
-                }
-                if let Some(btag) = &rule.balancer_tag && let Some(picked) = self.balancers.get(btag).and_then(|b| b.pick())
-                { return Some(picked); }
-                if !rule.tag.is_empty() { return Some(rule.tag.clone()); }
+        if let Some(rule) = self.pick_rule(ctx) {
+            // Matching is final before balancing, as in Go's PickRoute/GetTag.
+            // A failed balancer must not accidentally select a later rule.
+            if let Some(tag) = &rule.balancer_tag {
+                let balancer = self.balancers.get(tag)
+                    .ok_or_else(|| Error::NotFound(format!("balancer '{tag}' not found")))?;
+                return balancer.pick().filter(|tag| !tag.is_empty())
+                    .ok_or_else(|| Error::Other("balancing strategy returns empty tag".into()));
             }
-            None
-        };
-        let mut first_ips = target_ips.to_vec();
-        if self.domain_strategy == DomainStrategy::IpOnDemand && first_ips.is_empty()
-            && let Some(d) = target_domain
-        {
-            first_ips = self.resolve_domain_ips(d, target_port);
-        }
-        if let Some(picked) = eval_pass(&first_ips) { return Ok(picked); }
-        if self.domain_strategy == DomainStrategy::IpIfNonMatch && first_ips.is_empty()
-            && let Some(d) = target_domain
-        {
-            let resolved = self.resolve_domain_ips(d, target_port);
-            if !resolved.is_empty() && let Some(picked) = eval_pass(&resolved) {
-                return Ok(picked);
-            }
+            if !rule.tag.is_empty() { return Ok(rule.tag.clone()); }
         }
         self.default_tag.clone().ok_or_else(|| Error::NotFound("No matching route found".into()))
     }

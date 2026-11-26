@@ -99,6 +99,7 @@ impl LeastLoadStrategy {
 
 impl BalancingStrategy for LeastLoadStrategy {
     fn name(&self) -> &str { "leastLoad" }
+    fn fallback_tag(&self) -> Option<&str> { self.fallback_tag.as_deref() }
     fn pick_outbound(&self, tags: &[String]) -> Option<String> {
         if tags.is_empty() { return self.fallback_tag.clone(); }
         if let Some(best) = self.observatory.as_ref().and_then(|o| o.select_best_outbound(tags)) { return Some(best); }

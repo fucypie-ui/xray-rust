@@ -22,6 +22,10 @@ pub mod condition_serialize_test;
 #[cfg(test)]
 pub mod condition_test;
 #[cfg(test)]
+mod condition_parity_test;
+#[cfg(test)]
+mod routing_parity_test;
+#[cfg(test)]
 pub mod router_test;
 #[cfg(test)]
 pub mod strategy_leastload_test;

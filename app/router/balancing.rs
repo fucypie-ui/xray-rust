@@ -5,6 +5,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub trait BalancingStrategy: Send + Sync {
     fn name(&self) -> &str;
     fn pick_outbound(&self, tags: &[String]) -> Option<String>;
+    // The borrowed RouterFeature API must be able to return a strategy's
+    // stored fallback when it is outside the selected outbound pool.
+    fn fallback_tag(&self) -> Option<&str> { None }
 }
 
 pub struct RandomStrategy {
@@ -33,6 +36,7 @@ impl Default for RandomStrategy {
 
 impl BalancingStrategy for RandomStrategy {
     fn name(&self) -> &str { "random" }
+    fn fallback_tag(&self) -> Option<&str> { self.fallback_tag.as_deref() }
     fn pick_outbound(&self, tags: &[String]) -> Option<String> {
         if tags.is_empty() { return self.fallback_tag.clone(); }
         let alive_tags: Vec<String> = if let Some(obs) = &self.observatory {
@@ -73,9 +77,14 @@ impl RoundRobinStrategy {
 
 impl BalancingStrategy for RoundRobinStrategy {
     fn name(&self) -> &str { "roundRobin" }
+    fn fallback_tag(&self) -> Option<&str> { self.fallback_tag.as_deref() }
     fn pick_outbound(&self, tags: &[String]) -> Option<String> {
         if tags.is_empty() { return self.fallback_tag.clone(); }
-        let cur = self.index.fetch_add(1, Ordering::Relaxed);
+        // Go wraps the index after every pick using that call's pool size.
+        // Keeping an unbounded counter changes picks when the pool changes.
+        let cur = self.index.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |index| {
+            Some((index % tags.len() + 1) % tags.len())
+        }).expect("round-robin update always succeeds");
         let selected = &tags[cur % tags.len()];
         Some(selected.clone())
     }
@@ -97,6 +106,7 @@ impl LeastPingStrategy {
 
 impl BalancingStrategy for LeastPingStrategy {
     fn name(&self) -> &str { "leastPing" }
+    fn fallback_tag(&self) -> Option<&str> { self.fallback_tag.as_deref() }
     fn pick_outbound(&self, tags: &[String]) -> Option<String> {
         self.observatory.select_best_outbound(tags).or_else(|| self.fallback_tag.clone())
     }
@@ -118,6 +128,7 @@ impl LeastLoadStrategy {
 
 impl BalancingStrategy for LeastLoadStrategy {
     fn name(&self) -> &str { "leastLoad" }
+    fn fallback_tag(&self) -> Option<&str> { self.fallback_tag.as_deref() }
     fn pick_outbound(&self, tags: &[String]) -> Option<String> {
         self.observatory.select_best_outbound(tags).or_else(|| self.fallback_tag.clone())
     }
@@ -176,9 +187,10 @@ impl Balancer {
             })
             .cloned().collect();
         if matched.is_empty() {
-            self.fallback_tag.clone()
+            self.fallback_tag.clone().filter(|tag| !tag.is_empty())
         } else {
-            self.strategy.pick_outbound(&matched).or_else(|| self.fallback_tag.clone())
+            self.strategy.pick_outbound(&matched).filter(|tag| !tag.is_empty())
+                .or_else(|| self.fallback_tag.clone().filter(|tag| !tag.is_empty()))
         }
     }
 }

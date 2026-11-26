@@ -1,7 +1,9 @@
 use crate::app::router::geo::GeoDatabase;
 use crate::common::net::{Address, Network};
 use crate::common::protocol::SessionContext;
+use crate::features::routing::context::RoutingContext;
 use regex::Regex;
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::LazyLock;
@@ -26,6 +28,12 @@ impl DomainMatcher {
         {
             return Self::Regex(re);
         }
+        if let Some(substr) = s.strip_prefix("dotless:")
+            && !substr.contains('.')
+            && let Ok(re) = Regex::new(&format!("^[^.]*{substr}[^.]*$"))
+        {
+            return Self::Regex(re);
+        }
         let lower = s.to_lowercase();
         let parse_geosite_tag = |raw: &str, neg_outer: bool| -> Self {
             let (neg_inner, tag) = match raw.strip_prefix('!') {
@@ -42,15 +50,15 @@ impl DomainMatcher {
             }
             return Self::Plain(lower);
         }
-        if let Some(r) = lower.strip_prefix("full:") { Self::Exact(r.trim_end_matches('.').to_string()) }
-        else if let Some(r) = lower.strip_prefix("domain:") { Self::Suffix(r.trim_end_matches('.').to_string()) }
+        if let Some(r) = lower.strip_prefix("full:") { Self::Exact(r.to_string()) }
+        else if let Some(r) = lower.strip_prefix("domain:") { Self::Suffix(r.to_string()) }
         else if let Some(r) = lower.strip_prefix("keyword:") { Self::Keyword(r.to_string()) }
         else { Self::Plain(lower) }
     }
     pub fn matches(&self, domain: &str) -> bool {
-        let d_raw = domain.trim_end_matches('.');
-        if let DomainMatcher::Regex(re) = self { return re.is_match(d_raw); }
-        let d = d_raw.to_lowercase();
+        // The routing condition lowercases the input for every matcher, including
+        // regexes. The regex pattern itself remains case-sensitive, as in Go.
+        let d = domain.to_lowercase();
         match self {
             DomainMatcher::Exact(pattern) => d == *pattern,
             DomainMatcher::Suffix(pattern) => {
@@ -94,15 +102,20 @@ impl IpMatcher {
         }
         if lower == "private" { return Some(Self::Private(false)); }
         if lower == "!private" { return Some(Self::Private(true)); }
-        if let Some((ip_part, mask_part)) = s.split_once('/') && let Ok(mask) = mask_part.parse::<u8>() {
-            if let Ok(v4) = Ipv4Addr::from_str(ip_part) { return Some(Self::CidrV4(v4, mask)); }
-            if let Ok(v6) = Ipv6Addr::from_str(ip_part) { return Some(Self::CidrV6(v6, mask)); }
+        if s.contains('/') {
+            let cidr = super::condition_geoip::Cidr::parse(s)?;
+            return Some(match cidr.ip {
+                IpAddr::V4(v4) => Self::CidrV4(v4, cidr.prefix),
+                IpAddr::V6(v6) => Self::CidrV6(v6, cidr.prefix),
+            });
         }
-        IpAddr::from_str(s).ok().map(Self::Exact)
+        IpAddr::from_str(s).ok().map(|ip| Self::Exact(ip.to_canonical()))
     }
     pub fn matches(&self, ip: &IpAddr) -> bool {
+        let canonical = ip.to_canonical();
+        let ip = &canonical;
         match self {
-            IpMatcher::Exact(target_ip) => ip == target_ip,
+            IpMatcher::Exact(target_ip) => *ip == target_ip.to_canonical(),
             IpMatcher::Private(invert) => {
                 let hit = match ip {
                     IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
@@ -184,8 +197,9 @@ impl Rule {
         self.ip_matchers.iter().any(|m| m.matches(ip))
     }
     pub fn matches_user(&self, email: &str) -> bool {
+        if email.is_empty() { return false; }
         self.user_emails.iter().any(|pat| {
-            if let Some(re_str) = pat.strip_prefix("regexp:") {
+            if let Some(re_str) = pat.strip_prefix("regexp:").filter(|s| !s.is_empty()) {
                 Regex::new(re_str).is_ok_and(|re| re.is_match(email))
             } else {
                 pat == email
@@ -193,8 +207,7 @@ impl Rule {
         })
     }
     pub fn matches_protocol(&self, proto: &str) -> bool {
-        let p_low = proto.to_ascii_lowercase();
-        self.protocols.iter().any(|rp| p_low.starts_with(&rp.to_ascii_lowercase()))
+        !proto.is_empty() && self.protocols.iter().any(|rp| !rp.is_empty() && proto.starts_with(rp))
     }
     pub fn matches_local_os(&self) -> bool {
         let os = current_goos();
@@ -205,17 +218,21 @@ impl Rule {
         let Some(info) = info else { return false };
         let cur_pid = std::process::id();
         self.process.iter().any(|p| {
-            let p = p.replace('\\', "/");
+            let p = if cfg!(windows) { p.replace('\\', "/") } else { p.clone() };
             if p == "self/" {
                 info.pid == cur_pid
             } else if p == "xray/" {
-                info.pid == cur_pid || info.name.eq_ignore_ascii_case("xray")
+                std::env::current_exe().is_ok_and(|path| {
+                    let path = path.to_string_lossy();
+                    let path = if cfg!(windows) { path.replace('\\', "/") } else { path.into_owned() };
+                    path == info.path
+                })
             } else if p.ends_with('/') {
-                info.path.to_ascii_lowercase().starts_with(&p.to_ascii_lowercase())
+                info.path.starts_with(&p)
             } else if p.contains('/') {
-                info.path.eq_ignore_ascii_case(&p)
+                info.path == p
             } else {
-                info.name.eq_ignore_ascii_case(p.trim_end_matches(".exe"))
+                info.name == p.strip_suffix(".exe").unwrap_or(&p)
             }
         })
     }
@@ -240,65 +257,65 @@ impl Rule {
         resolved_ips: &[IpAddr],
         proc_cache: &mut Option<Option<crate::common::net::find_process::ProcessInfo>>,
     ) -> bool {
+        let context = SessionRoutingContext::new(session);
+        self.matches_context(&context, || {
+            let mut ips = context.get_target_ips();
+            ips.extend_from_slice(resolved_ips);
+            ips
+        }, proc_cache)
+    }
+    // Keep condition ordering in sync with RoutingRule.BuildCondition. Target IP
+    // access is lazy because it may invoke DNS; earlier conditions must be able
+    // to reject a rule without performing a lookup.
+    pub(crate) fn matches_context(
+        &self,
+        context: &dyn RoutingContext,
+        mut target_ips: impl FnMut() -> Vec<IpAddr>,
+        proc_cache: &mut Option<Option<crate::common::net::find_process::ProcessInfo>>,
+    ) -> bool {
         if !self.matches_local_os() { return false; }
-        if !self.inbound_tags.is_empty() && !self.inbound_tags.iter().any(|tag| tag == &session.inbound_tag)
+        if !self.inbound_tags.is_empty() {
+            let tag = context.get_inbound_tag();
+            if tag.is_empty() || !self.inbound_tags.iter().any(|t| t == tag) { return false; }
+        }
+        if self.network.is_some_and(|net| net != context.get_network()) { return false; }
+        if !self.protocols.is_empty()
+            && !context.get_protocol().is_some_and(|proto| self.matches_protocol(proto))
         { return false; }
-        if self.network.is_some_and(|net| net != session.destination.network) { return false; }
-        let target_port = session.route_target.as_ref().unwrap_or(&session.destination).port;
+        let target_port = context.get_target_port();
         if (!self.ports.is_empty() || !self.port_ranges.is_empty())
             && !self.ports.contains(&target_port)
             && !self.port_ranges.iter().any(|&(s, e)| (s..=e).contains(&target_port))
         { return false; }
         if !self.source_ports.is_empty() || !self.source_port_ranges.is_empty() {
-            let sp = session.source.map(|s| s.port()).unwrap_or(0);
+            let sp = context.get_source_port();
             if !self.source_ports.contains(&sp)
                 && !self.source_port_ranges.iter().any(|&(s, e)| (s..=e).contains(&sp))
             { return false; }
         }
+        if !self.user_emails.is_empty()
+            && !context.get_user().is_some_and(|email| self.matches_user(email))
+        { return false; }
+        if !self.ip_matchers.is_empty()
+            && !target_ips().iter().any(|ip| self.matches_destination_ip(ip))
+        { return false; }
         if !self.source_ip_matchers.is_empty()
-            && !session.source.is_some_and(|s| {
-                let ip = s.ip();
-                self.source_ip_matchers.iter().any(|m| m.matches(&ip))
+            && !context.get_source_ips().iter().any(|ip| {
+                self.source_ip_matchers.iter().any(|m| m.matches(ip))
             })
         { return false; }
-        if !self.protocols.is_empty()
-            && !session.sniffed_protocol.as_deref().is_some_and(|proto| self.matches_protocol(proto))
+        if !self.domain_matchers.is_empty()
+            && !context.get_target_domain().is_some_and(|d| {
+                !d.is_empty() && self.domain_matchers.iter().any(|m| m.matches(d))
+            })
         { return false; }
-        if !self.user_emails.is_empty()
-            && !session.user.as_ref().is_some_and(|u| self.matches_user(&u.email))
-        { return false; }
-        if !self.domain_matchers.is_empty() {
-            let domain = session
-                .route_target
-                .as_ref()
-                .and_then(|d| match &d.address { Address::Domain(s) => Some(s.as_str()), _ => None })
-                .or(session.sniffed_domain.as_deref())
-                .or(match &session.destination.address { Address::Domain(s) => Some(s.as_str()), _ => None })
-                .or_else(|| session.original_destination.as_ref().and_then(|d| match &d.address { Address::Domain(s) => Some(s.as_str()), _ => None }));
-            if !domain.is_some_and(|d| self.domain_matchers.iter().any(|m| m.matches(d))) {
-                return false;
-            }
-        }
-        if !self.ip_matchers.is_empty() {
-            let mut ip_matched = [
-                session.route_target.as_ref().and_then(|d| d.address.as_ip()),
-                session.destination.address.as_ip(),
-                session.original_destination.as_ref().and_then(|d| d.address.as_ip()),
-            ]
-            .into_iter()
-            .flatten()
-            .any(|ip| self.matches_destination_ip(&ip));
-            if !ip_matched && !resolved_ips.is_empty() {
-                ip_matched = resolved_ips.iter().any(|ip| self.matches_destination_ip(ip));
-            }
-            if !ip_matched { return false; }
-        }
         if !self.process.is_empty() {
             let info = proc_cache.get_or_insert_with(|| {
-                let src = session.source?;
+                let ip = *context.get_source_ips().first()?;
+                let src = std::net::SocketAddr::new(ip, context.get_source_port());
                 crate::common::net::ProcessFinder::find_process_by_socket(
                     src,
-                    session.destination.network == Network::Tcp,
+                    context.get_network() == Network::Tcp,
                 )
                 .ok()
                 .flatten()
@@ -306,5 +323,46 @@ impl Rule {
             if !self.matches_process_info(info.as_ref()) { return false; }
         }
         true
+    }
+}
+
+// A borrowed adapter lets both Router entry points share the same condition
+// evaluation while retaining SessionContext's original-destination IP support.
+pub(crate) struct SessionRoutingContext<'a> {
+    session: &'a SessionContext,
+}
+
+impl<'a> SessionRoutingContext<'a> {
+    pub(crate) fn new(session: &'a SessionContext) -> Self { Self { session } }
+}
+
+impl RoutingContext for SessionRoutingContext<'_> {
+    fn get_inbound_tag(&self) -> &str { &self.session.inbound_tag }
+    fn get_source_ips(&self) -> Vec<IpAddr> { self.session.source.map(|s| vec![s.ip()]).unwrap_or_default() }
+    fn get_source_port(&self) -> u16 { self.session.source.map(|s| s.port()).unwrap_or(0) }
+    fn get_target_ips(&self) -> Vec<IpAddr> {
+        [
+            self.session.route_target.as_ref().and_then(|d| d.address.as_ip()),
+            self.session.destination.address.as_ip(),
+            self.session.original_destination.as_ref().and_then(|d| d.address.as_ip()),
+        ].into_iter().flatten().collect()
+    }
+    fn get_target_port(&self) -> u16 {
+        self.session.route_target.as_ref().unwrap_or(&self.session.destination).port
+    }
+    fn get_target_domain(&self) -> Option<&str> {
+        self.session.route_target.as_ref()
+            .and_then(|d| match &d.address { Address::Domain(s) => Some(s.as_str()), _ => None })
+            .or(self.session.sniffed_domain.as_deref())
+            .or(match &self.session.destination.address { Address::Domain(s) => Some(s.as_str()), _ => None })
+            .or_else(|| self.session.original_destination.as_ref()
+                .and_then(|d| match &d.address { Address::Domain(s) => Some(s.as_str()), _ => None }))
+    }
+    fn get_network(&self) -> Network { self.session.destination.network }
+    fn get_protocol(&self) -> Option<&str> { self.session.sniffed_protocol.as_deref() }
+    fn get_user(&self) -> Option<&str> { self.session.user.as_ref().map(|u| u.email.as_str()) }
+    fn get_attributes(&self) -> &HashMap<String, String> {
+        static EMPTY: LazyLock<HashMap<String, String>> = LazyLock::new(HashMap::new);
+        &EMPTY
     }
 }
