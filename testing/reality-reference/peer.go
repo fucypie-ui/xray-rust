@@ -5,7 +5,8 @@ package main
 import (
     "context"
     "crypto/ecdh"
-    "crypto/ed25519"
+    "crypto/ecdsa"
+    "crypto/elliptic"
     "crypto/rand"
     "crypto/tls"
     "crypto/x509"
@@ -18,6 +19,7 @@ import (
     "math/big"
     "net"
     "os"
+    "sync"
     "time"
 
     reality "github.com/xtls/reality"
@@ -30,6 +32,15 @@ func must(err error) { if err != nil { panic(err) } }
 // Preserve net.Conn deadlines/addresses while splitting socket I/O independently
 // of the TLS record lengths, to test reassembly against an unrelated engine.
 type fragmented struct { net.Conn }
+
+// REALITY asserts this interface before processing ClientHello. Embedding
+// net.Conn hides TCPConn.CloseWrite unless we explicitly forward it.
+var _ reality.CloseWriteConn = fragmented{}
+func (c fragmented) CloseWrite() error {
+    if conn, ok := c.Conn.(interface { CloseWrite() error }); ok { return conn.CloseWrite() }
+    return fmt.Errorf("fragmented connection does not support CloseWrite")
+}
+
 func (c fragmented) Read(p []byte) (int, error) {
     if len(p) > 7 { p = p[:7] }
     return c.Conn.Read(p)
@@ -72,7 +83,9 @@ func main() {
     sid := flags.String("short-id", "01020304", "short ID")
     split := flags.Bool("fragment", false, "split socket reads and writes")
     hybrid := flags.Bool("hybrid", false, "cover TLS server selects hybrid key exchange")
+    connections := flags.Int("connections", 1, "number of cover TLS connections, including target probes")
     must(flags.Parse(os.Args[2:]))
+    if *connections < 1 { panic("cover connections must be positive") }
     var raw [32]byte
     for i := range raw { raw[i] = 7 }
     private, err := ecdh.X25519().NewPrivateKey(raw[:]); must(err)
@@ -80,21 +93,26 @@ func main() {
     if len(short) > 8 { panic("short ID too long") }
     switch mode {
     case "server":
+        var padded [8]byte
+        copy(padded[:], short)
+        dialer := &net.Dialer{Timeout: 10 * time.Second}
+        config := &reality.Config{
+            DialContext: dialer.DialContext, Type: "tcp", Dest: *dest,
+            PrivateKey: private, ServerNames: map[string]bool{*name: true},
+            ShortIds: map[[8]byte]bool{padded: true}, MaxTimeDiff: time.Minute,
+            SessionTicketsDisabled: true,
+        }
+        // Direct Server users must launch the pinned target detector. Without
+        // it, even a verified ClientFinished waits forever on the absent cache.
+        // One SNI starts six probe connections: two for each ALPN profile.
+        reality.DetectPostHandshakeRecordsLens(config)
         listener, err := net.Listen("tcp", *address); must(err)
         defer listener.Close()
         ready(listener)
         underlying, err := listener.Accept(); must(err)
         underlying = wrap(underlying, *split)
         defer underlying.Close()
-        var padded [8]byte
-        copy(padded[:], short)
-        dialer := &net.Dialer{Timeout: 10 * time.Second}
-        conn, err := reality.Server(context.Background(), underlying, &reality.Config{
-            DialContext: dialer.DialContext, Type: "tcp", Dest: *dest,
-            PrivateKey: private, ServerNames: map[string]bool{*name: true},
-            ShortIds: map[[8]byte]bool{padded: true}, MaxTimeDiff: time.Minute,
-            SessionTicketsDisabled: true,
-        })
+        conn, err := reality.Server(context.Background(), underlying, config)
         must(err)
         if conn == nil { panic("Go REALITY server returned no authenticated connection") }
         echo(conn)
@@ -119,7 +137,10 @@ func main() {
         if string(response) != "reality-auth-ok" { panic("bad echo response") }
         fmt.Println("authenticated")
     case "cover":
-        public, signing, err := ed25519.GenerateKey(rand.Reader); must(err)
+        // Chrome does not advertise Ed25519 for ordinary TLS certificates.
+        // The target must complete its flight before REALITY can substitute
+        // its independently authenticated Ed25519 leaf.
+        signing, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader); must(err)
         names := []string{*name}
         for i := 0; i < 40; i++ { names = append(names, fmt.Sprintf("cover-%d.example.com", i)) }
         template := &x509.Certificate{SerialNumber: big.NewInt(1),
@@ -128,7 +149,7 @@ func main() {
             KeyUsage: x509.KeyUsageDigitalSignature,
             ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
         }
-        certificate, err := x509.CreateCertificate(rand.Reader, template, template, public, signing); must(err)
+        certificate, err := x509.CreateCertificate(rand.Reader, template, template, &signing.PublicKey, signing); must(err)
         curves := []tls.CurveID{tls.X25519}
         if *hybrid { curves = []tls.CurveID{tls.X25519MLKEM768} }
         listener, err := tls.Listen("tcp", *address, &tls.Config{
@@ -138,12 +159,23 @@ func main() {
         }); must(err)
         defer listener.Close()
         ready(listener)
-        conn, err := listener.Accept(); must(err)
-        conn = wrap(conn, *split)
-        defer conn.Close()
-        // Successful REALITY intercepts the target's flight, so the target sees
-        // EOF before ClientFinished. Rejected authentication completes here.
-        _, _ = io.Copy(io.Discard, conn)
+        var serving sync.WaitGroup
+        for i := 0; i < *connections; i++ {
+            conn, err := listener.Accept(); must(err)
+            conn = wrap(conn, *split)
+            serving.Add(1)
+            go func(conn net.Conn) {
+                defer serving.Done()
+                defer conn.Close()
+                // Successful REALITY intercepts the target's flight, so the
+                // target sees EOF before ClientFinished. Probes and rejected
+                // authentication still use the ordinary TLS server here.
+                if _, err := io.Copy(io.Discard, conn); err != nil {
+                    fmt.Fprintf(os.Stderr, "cover TLS ended: %v\n", err)
+                }
+            }(conn)
+        }
+        serving.Wait()
     default:
         panic("unknown mode: " + mode)
     }

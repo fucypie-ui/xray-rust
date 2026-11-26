@@ -36,11 +36,19 @@ live TLS interoperability.
 
 build-peer.sh compiles peer.go alone. It calls the pinned Xray-core REALITY UClient
 and the pinned XTLS/REALITY Server directly; it does not copy or reimplement those
-handshakes in Rust or Go. Its local TLS cover server has an ordinary Ed25519
+handshakes in Rust or Go. Its local TLS cover server has an ordinary P-256 ECDSA
 certificate and supports X25519 or X25519MLKEM768 target selection. The client
 asserts UConn.Verified, then exchanges exact application bytes. The negative gate
 uses a wrong short ID and requires rejection without an authenticated Rust stream.
-Socket splitting exercises fragmented TLS across engine boundaries.
+Socket splitting exercises fragmented TLS across engine boundaries and forwards
+the CloseWrite half-close interface required by the pinned REALITY server. The
+cover certificate uses a scheme actually advertised by the pinned Chrome profile;
+the authenticated REALITY certificate remains Ed25519. Positive Go-client failures
+report the exit status, stdout and stderr rather than hiding the peer's error.
+The direct Go Server call starts its required DetectPostHandshakeRecordsLens
+probes. For that direction, the cover accepts seven concurrent connections:
+six probes (two per ALPN profile for one SNI) and the real handshake. The reverse
+and negative directions retain the single-connection cover.
 
 The Go binary is test-only, launched exclusively by cfg(test) Rust code. Runtime
 REALITY transport never starts this binary or any other subprocess. These gates

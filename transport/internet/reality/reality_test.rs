@@ -272,7 +272,10 @@ async fn stream_pair() -> (BoxStream, BoxStream, tokio::task::JoinHandle<()>) {
     let client = RealityClient::new("www.example.com", &hex::encode(public.as_bytes()), "01020304").unwrap();
     let (left, right) = tokio::io::duplex(65536);
     let (client, server) = tokio::join!(client.connect(Box::pin(left)), server.accept(Box::pin(right)));
-    (client.unwrap(), server.unwrap().unwrap(), cover)
+    // Report the server's concrete staging error before the client's secondary
+    // transport EOF (for example, an unsupported record-padding provider).
+    let server = server.expect("REALITY server handshake").expect("authenticated REALITY stream");
+    (client.expect("REALITY client handshake"), server, cover)
 }
 
 #[tokio::test]

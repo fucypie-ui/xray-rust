@@ -46,8 +46,23 @@ pub(super) fn certified_key(auth: &[u8; 32]) -> io::Result<rustls::sign::Certifi
     Ok(rustls::sign::CertifiedKey::new(vec![CertificateDer::from(der)], signing))
 }
 
+// Pinned Go REALITY sets hs.sigAlg = Ed25519, including for Chrome profiles
+// that omit it from signature_algorithms. uTLS still verifies the real
+// CertificateVerify signature. Limit this selection rule to REALITY servers;
+// retain the ring signer and the HMAC-authenticated Ed25519 certificate.
+#[derive(Debug)]
+struct RealitySigningKey(Arc<dyn rustls::sign::SigningKey>);
+impl rustls::sign::SigningKey for RealitySigningKey {
+    fn choose_scheme(&self, _: &[rustls::SignatureScheme]) -> Option<Box<dyn rustls::sign::Signer>> {
+        self.0.choose_scheme(&[rustls::SignatureScheme::ED25519])
+    }
+    fn public_key(&self) -> Option<rustls::pki_types::SubjectPublicKeyInfoDer<'_>> { self.0.public_key() }
+    fn algorithm(&self) -> rustls::SignatureAlgorithm { self.0.algorithm() }
+}
+
 pub(super) fn server_config(auth: &[u8; 32]) -> io::Result<Arc<rustls::ServerConfig>> {
-    let key = certified_key(auth)?;
+    let mut key = certified_key(auth)?;
+    key.key = Arc::new(RealitySigningKey(key.key));
     let mut config = rustls::ServerConfig::builder_with_provider(Arc::new(super::kx::provider()))
         .with_protocol_versions(&[&rustls::version::TLS13]).map_err(io::Error::other)?
         .with_no_client_auth().with_cert_resolver(Arc::new(rustls::sign::SingleCertAndKey::from(key)));
@@ -55,4 +70,26 @@ pub(super) fn server_config(auth: &[u8; 32]) -> io::Result<Arc<rustls::ServerCon
     // Go REALITY's NextProtos is nil. Do not advertise an invented protocol.
     config.alpn_protocols.clear();
     Ok(Arc::new(config))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustls::sign::SigningKey;
+
+    #[test]
+    fn reality_selects_and_proves_ed25519_with_chrome_signature_schemes() {
+        let auth = [7; 32];
+        let key = certified_key(&auth).unwrap();
+        let public = verify_certificate(&key.cert[0], &auth).unwrap();
+        let offered = [rustls::SignatureScheme::ECDSA_NISTP256_SHA256, rustls::SignatureScheme::RSA_PSS_SHA256];
+        assert!(key.key.choose_scheme(&offered).is_none(), "ordinary TLS must respect the offered schemes");
+        let signer = RealitySigningKey(key.key).choose_scheme(&offered).expect("Go REALITY selects Ed25519 even when Chrome omits it");
+        assert_eq!(signer.scheme(), rustls::SignatureScheme::ED25519);
+        let signature = signer.sign(b"TLS 1.3 CertificateVerify transcript").unwrap();
+        let verifier = ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public);
+        verifier.verify(b"TLS 1.3 CertificateVerify transcript", &signature).unwrap();
+        assert!(verifier.verify(b"modified transcript", &signature).is_err());
+        assert!(verify_certificate(&key.cert[0], &[8; 32]).is_err());
+    }
 }

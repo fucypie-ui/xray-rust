@@ -37,6 +37,14 @@ Copyright (c) 2021-2023 Alex Lau <github@alau.ca>. The complete required notice 
 in LICENSE-SHOES-MIT. The rustls fork remains a separate Cargo dependency under
 its upstream license; no vendored fork source is included here.
 
+padding.rs adds the fork's record-padding operation to the connection-local ring
+provider for AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305. It retains ring's
+decryption, HKDF, suite order and confidentiality limits. TLSInnerPlaintext is
+payload || content type || zero padding, with the complete ciphertext length
+authenticated as TLS AAD and checked before allocation. The stock ring provider
+in the pinned fork rejects nonzero padding, so it cannot stage target-sized
+REALITY flights directly. The global provider and pinned fork are unchanged.
+
 ## Authentication and forwarding
 
 - ClientHello is built by rustls, with a 32-byte session ID. Client hooks bind
@@ -54,6 +62,10 @@ its upstream license; no vendored fork source is included here.
   authenticates its certificate signature field. The actual TLS
   CertificateVerify must independently prove possession of that key using
   Ed25519. All-zero/low-order X25519 secrets and malformed DER are rejected.
+  Like pinned Go's explicit hs.sigAlg = Ed25519, REALITY server credentials
+  select Ed25519 even when a Chrome profile omits it from signature_algorithms.
+  This rule is confined to the REALITY server credential; the actual ring
+  signature and independent client CertificateVerify check remain mandatory.
 - An unrelated target certificate must pass normal WebPKI DNS/chain/time checks.
   It never authenticates a VLESS stream. Instead, a bounded same-origin cover GET
   reuses that verified TLS connection over negotiated h2 or HTTP/1.1, and the

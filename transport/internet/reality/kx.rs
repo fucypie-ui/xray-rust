@@ -29,6 +29,7 @@ static HYBRID: HybridGroup = HybridGroup;
 
 pub(super) fn provider() -> CryptoProvider {
     let mut provider = rustls::crypto::ring::default_provider();
+    provider.cipher_suites = super::padding::cipher_suites();
     provider.kx_groups = vec![&HYBRID, rustls::crypto::ring::kx_group::X25519];
     provider
 }

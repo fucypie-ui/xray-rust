@@ -4,6 +4,7 @@ mod certificate;
 mod hello;
 mod hooks;
 mod kx;
+mod padding;
 mod stream;
 
 #[cfg(test)]

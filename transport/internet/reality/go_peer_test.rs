@@ -38,7 +38,10 @@ async fn echo(mut stream: crate::common::net::BoxStream) {
 async fn rust_client_authenticates_pinned_go_server_classical_and_hybrid_targets() {
     for hybrid in [false, true] {
         tokio::time::timeout(Duration::from_secs(35), async {
-            let cover_args = if hybrid { vec!["cover", "--hybrid"] } else { vec!["cover"] };
+            // Pinned Go Server requires six target probes for one SNI, plus
+            // the actual REALITY connection. Serve all seven concurrently.
+            let mut cover_args = vec!["cover", "--connections", "7"];
+            if hybrid { cover_args.push("--hybrid"); }
             let (mut cover, dest) = start(&cover_args).await;
             let (mut server, address) = start(&["server", "--dest", &dest, "--fragment"]).await;
             let public = PublicKey::from(&StaticSecret::from([7; 32]));
@@ -74,8 +77,9 @@ async fn pinned_go_client_authenticates_rust_server_classical_and_hybrid_targets
                 let stream = server.accept(Box::pin(socket)).await.unwrap().expect("real Go client must authenticate Rust server");
                 echo(stream).await;
             });
-            let output = peer().args(["client", "--address", &address, "--fragment"]).output().await.unwrap();
-            assert!(output.status.success(), "Go client rejected REALITY: {}", String::from_utf8_lossy(&output.stdout));
+            let output = peer().args(["client", "--address", &address, "--fragment"]).stderr(Stdio::piped()).output().await.unwrap();
+            assert!(output.status.success(), "Go client rejected REALITY (hybrid={hybrid}, status={}): stdout={} stderr={}",
+                output.status, String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
             assert!(String::from_utf8_lossy(&output.stdout).contains("authenticated"));
             task.await.unwrap();
             assert!(cover.wait().await.unwrap().success());
