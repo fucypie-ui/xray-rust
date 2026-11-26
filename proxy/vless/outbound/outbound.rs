@@ -15,6 +15,7 @@ use crate::common::protocol::{RequestCommand, SessionContext};
 use crate::features::outbound::OutboundHandler;
 use crate::proxy::vless::encoding::{Addons, RequestHeader};
 use crate::proxy::vless::flow::{FLOW_VISION, VisionStream};
+use crate::transport::internet::dialer::Dialer;
 use crate::transport::internet::reality::RealityClient;
 use crate::transport::internet::websocket::{DelayDialConn, parse_ws_early_data};
 use crate::transport::internet::{TcpDialer, TlsClient, WebSocketStream};
@@ -50,6 +51,7 @@ impl Drop for PingoraPrePool {
 #[derive(Clone)]
 struct DialParams {
     server_addr: Destination,
+    dialer: Option<Arc<dyn Dialer>>,
     tls_client: Option<Arc<TlsClient>>,
     tls_sni: Option<String>,
     reality_client: Option<Arc<RealityClient>>,
@@ -84,6 +86,9 @@ impl DialParams {
         #[cfg(debug_assertions)] trace_ctx: Option<(u64, std::time::Instant)>,
     ) -> Result<BoxStream> {
         if let Some(ref xhttp_cfg) = self.splithttp_cfg {
+            if self.dialer.is_some() {
+                return Err(Error::Unsupported("VLESS XHTTP cannot compose with a configured transport dialer".into()));
+            }
             let mut client = crate::transport::internet::splithttp::client::DefaultDialerClient::new(
                 xhttp_cfg.clone(),
                 self.server_addr.clone(),
@@ -110,7 +115,10 @@ impl DialParams {
         };
         #[cfg(debug_assertions)]
         let _tcp_t0 = std::time::Instant::now();
-        let tcp_stream = TcpDialer::dial(&self.server_addr).await?;
+        let tcp_stream = match &self.dialer {
+            Some(dialer) => dialer.dial(&self.server_addr).await?,
+            None => TcpDialer::dial(&self.server_addr).await?,
+        };
         #[cfg(debug_assertions)]
         trace_step("3. 外层 TCP 建连 (RTT 1)", _tcp_t0, format!("server={}", self.server_addr));
         let tcp_stream: BoxStream = match &self.fragment_cfg {
@@ -225,7 +233,7 @@ impl Client {
         Self {
             tag: tag.into(), user_id, flow: None, encryption: None,
             dial_params: DialParams {
-                server_addr, tls_client: tls_client.map(Arc::new), tls_sni, reality_client: None,
+                server_addr, dialer: None, tls_client: tls_client.map(Arc::new), tls_sni, reality_client: None,
                 ws_path, ws_host, ws_headers: HashMap::new(), ws_heartbeat: 0, ws_ed,
                 httpupgrade_path: None, httpupgrade_host: None, httpupgrade_headers: HashMap::new(),
                 splithttp_cfg: None, fragment_cfg: None,
@@ -234,6 +242,11 @@ impl Client {
         }
     }
     pub fn has_ws_early_data(&self) -> bool { self.dial_params.ws_ed > 0 }
+    /// Set the base transport before enabling preconnections with with_testpre.
+    pub fn with_dialer(mut self, dialer: Arc<dyn Dialer>) -> Self {
+        self.dial_params.dialer = Some(dialer);
+        self
+    }
     pub fn with_ws_headers(mut self, headers: HashMap<String, String>) -> Self {
         self.dial_params.ws_headers = headers;
         self
@@ -594,6 +607,66 @@ pub use Client as Handler;
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    struct MockDialer {
+        expected: Destination,
+        calls: std::sync::atomic::AtomicUsize,
+        fail: bool,
+    }
+
+    #[async_trait]
+    impl Dialer for MockDialer {
+        async fn dial(&self, dest: &Destination) -> Result<BoxStream> {
+            assert_eq!(dest, &self.expected);
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.fail { return Err(Error::Other("mock base transport failure".into())); }
+            let (stream, mut peer) = tokio::io::duplex(64);
+            peer.write_all(b"injected").await.unwrap();
+            Ok(Box::pin(stream))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_configured_dialer_survives_params_clone_and_supplies_stream() {
+        let dest = Destination::from_domain_port("configured-transport.invalid", 443);
+        let dialer = Arc::new(MockDialer { expected: dest.clone(), calls: 0.into(), fail: false });
+        let client = Client::new("proxy", dest, Uuid::nil(), None, None, None, None).with_dialer(dialer.clone());
+        let params = client.dial_params.clone();
+        let mut stream = params.dial_and_handshake_inner(None, #[cfg(debug_assertions)] None).await.unwrap();
+        let mut bytes = [0; 8];
+        stream.read_exact(&mut bytes).await.unwrap();
+        assert_eq!(&bytes, b"injected");
+        assert_eq!(dialer.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_configured_dialer_errors_precede_tls_reality_and_websocket() {
+        for reality in [false, true] {
+            let dest = Destination::from_domain_port("configured-transport.invalid", 443);
+            let dialer = Arc::new(MockDialer { expected: dest.clone(), calls: 0.into(), fail: true });
+            let tls = TlsClient::new("www.example.com", false, vec![]).unwrap();
+            let mut client = Client::new("proxy", dest, Uuid::nil(), Some(tls), None, Some("/ws".into()), None)
+                .with_dialer(dialer.clone());
+            if reality {
+                client = client.with_reality(RealityClient::new("www.example.com", &hex::encode([7; 32]), "").unwrap());
+            }
+            let result = client.dial_params.dial_and_handshake_inner(None, #[cfg(debug_assertions)] None).await;
+            assert!(matches!(result, Err(Error::Other(message)) if message == "mock base transport failure"));
+            assert_eq!(dialer.calls.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_xhttp_rejects_configured_dialer_instead_of_bypassing_it() {
+        let dest = Destination::from_domain_port("configured-transport.invalid", 443);
+        let dialer = Arc::new(MockDialer { expected: dest.clone(), calls: 0.into(), fail: false });
+        let client = Client::new("proxy", dest, Uuid::nil(), None, None, None, None)
+            .with_dialer(dialer.clone()).with_splithttp(Default::default());
+        let result = client.dial_params.dial_and_handshake_inner(None, #[cfg(debug_assertions)] None).await;
+        assert!(matches!(result, Err(Error::Unsupported(message)) if message.contains("configured transport dialer")));
+        assert_eq!(dialer.calls.load(Ordering::SeqCst), 0);
+    }
+
     #[tokio::test]
     async fn test_vless_stream_tcp_coalesce_and_strip_header() {
         let (client_io, mut server_io) = tokio::io::duplex(4096);
