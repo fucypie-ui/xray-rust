@@ -7,6 +7,7 @@ on:
       - testing/config-reference/**
       - testing/hysteria-reference/**
       - testing/kcp-reference/**
+      - testing/mux-reference/**
       - testing/reality-reference/**
       - testing/ss2022-reference/**
       - testing/vmess-reference/**
@@ -24,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        engine: [config, hysteria, kcp, reality, ss2022, vmess, wireguard]
+        engine: [config, hysteria, kcp, mux, reality, ss2022, vmess, wireguard]
     env:
       GOTOOLCHAIN: auto
       REFERENCE_ENGINE: ${{ matrix.engine }}
