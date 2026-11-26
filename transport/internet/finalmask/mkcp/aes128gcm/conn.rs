@@ -31,7 +31,7 @@ impl Aes128GcmPacketConn {
     pub fn wrap(&self, plaintext: &[u8]) -> Result<Vec<u8>> {
         let mut nonce = [0u8; GCM_NONCE_SIZE];
         rand::rng().fill_bytes(&mut nonce);
-        let ct = self.cipher.encrypt(Nonce::from_slice(&nonce), plaintext).map_err(|e| Error::Protocol(format!("aes128gcm seal error: {:?}", e)))?;
+        let ct = self.cipher.encrypt((&nonce).into(), plaintext).map_err(|e| Error::Protocol(format!("aes128gcm seal error: {:?}", e)))?;
         let mut out = Vec::with_capacity(GCM_NONCE_SIZE + ct.len());
         out.extend_from_slice(&nonce);
         out.extend_from_slice(&ct);
@@ -40,7 +40,7 @@ impl Aes128GcmPacketConn {
     pub fn unwrap(&self, packet: &[u8]) -> Result<Vec<u8>> {
         if packet.len() < GCM_NONCE_SIZE + GCM_TAG_SIZE { return Err(Error::Protocol("aead short length".into())); }
         let (nonce_bytes, ciphertext) = packet.split_at(GCM_NONCE_SIZE);
-        let nonce = Nonce::from_slice(nonce_bytes);
+        let nonce: &Nonce = nonce_bytes.try_into().expect("12-byte packet nonce");
         self.cipher.decrypt(nonce, ciphertext).map_err(|e| Error::Protocol(format!("aead open: {:?}", e)))
     }
 }

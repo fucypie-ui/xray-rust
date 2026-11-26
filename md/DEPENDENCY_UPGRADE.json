@@ -918,7 +918,7 @@
       "alias": "toml",
       "crate": "toml",
       "previous_requirement": "new (protocol/config/REALITY integration)",
-      "requirement": "1.2.3+spec-1.1.0",
+      "requirement": "1.2.3",
       "latest_stable": "1.2.3+spec-1.1.0",
       "yanked": false,
       "published_at": "2026-11-25T01:44:12.122385Z",
@@ -967,6 +967,48 @@
       "rust_version": null,
       "source": "https://crates.io/api/v1/crates/json_comments",
       "checked_at": "2026-11-26T20:09:40.224327+00:00"
+    },
+    {
+      "manifest": "Cargo.toml",
+      "section": "dependencies",
+      "alias": "shake",
+      "crate": "shake",
+      "previous_requirement": "new (VMess/Hysteria integration)",
+      "requirement": "0.1.0",
+      "latest_stable": "0.1.0",
+      "yanked": false,
+      "published_at": "2026-05-15T17:16:58.539249Z",
+      "rust_version": "1.85",
+      "source": "https://crates.io/api/v1/crates/shake",
+      "checked_at": "2026-11-26T20:13:28.934085+00:00"
+    },
+    {
+      "manifest": "Cargo.toml",
+      "section": "dependencies",
+      "alias": "quinn-proto",
+      "crate": "quinn-proto",
+      "previous_requirement": "new (VMess/Hysteria integration)",
+      "requirement": "0.11.19",
+      "latest_stable": "0.11.19",
+      "yanked": false,
+      "published_at": "2026-09-30T09:13:59.040527Z",
+      "rust_version": "1.85",
+      "source": "https://crates.io/api/v1/crates/quinn-proto",
+      "checked_at": "2026-11-26T20:13:29.454730+00:00"
+    },
+    {
+      "manifest": "Cargo.toml",
+      "section": "dependencies",
+      "alias": "go-parse-duration",
+      "crate": "go-parse-duration",
+      "previous_requirement": "new (configuration integration)",
+      "requirement": "0.1.1",
+      "latest_stable": "0.1.1",
+      "yanked": false,
+      "published_at": "2021-07-17T16:59:25.917332Z",
+      "rust_version": null,
+      "source": "https://crates.io/api/v1/crates/go-parse-duration",
+      "checked_at": "2026-11-26T20:14:18.551036+00:00"
     }
   ],
   "replaced_dependencies": [

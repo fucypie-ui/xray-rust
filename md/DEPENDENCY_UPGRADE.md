@@ -5,7 +5,6 @@ Verified from the official crates.io API on 2026-11-26T20:05:36.798243+00:00 (UT
 Maximum semantic version with no prerelease component and yanked=false; official crates.io API; all direct, target, dev and build dependency sections in both manifests.
 
 The table records registry evidence, not a build-success claim. Linux resolver and CI results are recorded below after validation. No Rust, Cargo, rustc, or Go installation or execution is performed on Android.
-
 | Manifest / section | Dependency (registry package) | Previous requirement | Latest stable / new requirement | Published (UTC) | Source |
 | --- | --- | --- | --- | --- | --- |
 | `Cargo.toml` / `dependencies` | `tokio` (`tokio`) | `1.40` | `1.54.1` / `1.54.1` | 2026-10-21T21:05:43.950213Z | [crates.io API](https://crates.io/api/v1/crates/tokio) |
@@ -65,7 +64,6 @@ The table records registry evidence, not a build-success claim. Linux resolver a
 | `debug_panel/dioxus_app/Cargo.toml` / `dependencies` | `serde` (`serde`) | `1.0` | `1.0.229` / `1.0.229` | 2026-07-18T23:05:13.266456Z | [crates.io API](https://crates.io/api/v1/crates/serde) |
 | `debug_panel/dioxus_app/Cargo.toml` / `dependencies` | `serde_json` (`serde_json`) | `1.0` | `1.0.154` / `1.0.154` | 2026-10-11T15:31:46.076577Z | [crates.io API](https://crates.io/api/v1/crates/serde_json) |
 | `debug_panel/dioxus_app/Cargo.toml` / `dependencies` | `tokio` (`tokio`) | `1.40` | `1.54.1` / `1.54.1` | 2026-10-21T21:05:43.950213Z | [crates.io API](https://crates.io/api/v1/crates/tokio) |
-
 | `Cargo.toml` / `dependencies` | `boringtun` (`boringtun`) | New dependency | `0.7.1` / `0.7.1` | 2026-05-01T22:53:45.364117Z | [crates.io API](https://crates.io/api/v1/crates/boringtun) |
 | `Cargo.toml` / `dependencies` | `smoltcp` (`smoltcp`) | New dependency | `0.14.0` / `0.14.0` | 2026-08-17T01:47:21.367822Z | [crates.io API](https://crates.io/api/v1/crates/smoltcp) |
 | `Cargo.toml` / `dependencies` | `quinn` (`quinn`) | New dependency | `0.11.12` / `0.11.12` | 2026-09-14T10:08:47.662258Z | [crates.io API](https://crates.io/api/v1/crates/quinn) |
@@ -74,10 +72,13 @@ The table records registry evidence, not a build-success claim. Linux resolver a
 | `Cargo.toml` / `dependencies` | `ring` (`ring`) | New dependency | `0.17.14` / `0.17.14` | 2025-03-11T19:42:03.889273Z | [crates.io API](https://crates.io/api/v1/crates/ring) |
 | `Cargo.toml` / `dependencies` | `x509-parser` (`x509-parser`) | New dependency | `0.18.1` / `0.18.1` | 2026-02-05T09:30:31.546618Z | [crates.io API](https://crates.io/api/v1/crates/x509-parser) |
 | `Cargo.toml` / `dependencies` | `serde_yaml_ng` (`serde_yaml_ng`) | New dependency | `0.10.0` / `0.10.0` | 2024-05-26T19:57:45.710414Z | [crates.io API](https://crates.io/api/v1/crates/serde_yaml_ng) |
-| `Cargo.toml` / `dependencies` | `toml` (`toml`) | New dependency | `1.2.3+spec-1.1.0` / `1.2.3+spec-1.1.0` | 2026-11-25T01:44:12.122385Z | [crates.io API](https://crates.io/api/v1/crates/toml) |
+| `Cargo.toml` / `dependencies` | `toml` (`toml`) | New dependency | `1.2.3+spec-1.1.0` / `1.2.3` | 2026-11-25T01:44:12.122385Z | [crates.io API](https://crates.io/api/v1/crates/toml) |
 | `Cargo.toml` / `dependencies` | `prost` (`prost`) | New dependency | `0.14.6` / `0.14.6` | 2026-11-12T17:42:17.010527Z | [crates.io API](https://crates.io/api/v1/crates/prost) |
 | `Cargo.toml` / `dependencies` | `prost-reflect` (`prost-reflect`) | New dependency | `0.16.5` / `0.16.5` | 2026-07-09T22:11:04.717484Z | [crates.io API](https://crates.io/api/v1/crates/prost-reflect) |
 | `Cargo.toml` / `dependencies` | `json_comments` (`json_comments`) | New dependency | `0.2.2` / `0.2.2` | 2023-11-03T06:07:26.854567Z | [crates.io API](https://crates.io/api/v1/crates/json_comments) |
+| `Cargo.toml` / `dependencies` | `shake` (`shake`) | New dependency | `0.1.0` / `0.1.0` | 2026-05-15T17:16:58.539249Z | [crates.io API](https://crates.io/api/v1/crates/shake) |
+| `Cargo.toml` / `dependencies` | `quinn-proto` (`quinn-proto`) | New dependency | `0.11.19` / `0.11.19` | 2026-09-30T09:13:59.040527Z | [crates.io API](https://crates.io/api/v1/crates/quinn-proto) |
+| `Cargo.toml` / `dependencies` | `go-parse-duration` (`go-parse-duration`) | New dependency | `0.1.1` / `0.1.1` | 2021-07-17T16:59:25.917332Z | [crates.io API](https://crates.io/api/v1/crates/go-parse-duration) |
 
 ## Migration and Linux validation
 
@@ -88,3 +89,5 @@ Pending Linux resolution, API migrations, strict CI, and pinned Go fixture compa
 ## Approved REALITY source override
 
 The root rustls dependency remains 0.23.46 with ring/std/tls12. Its source is the approved [cfal/rustls revision](https://raw.githubusercontent.com/cfal/rustls/f1a23c187330386e9e7f14a21dbae368034dc430/rustls/Cargo.toml), pinned to `f1a23c187330386e9e7f14a21dbae368034dc430`; the upstream Cargo manifest reports version 0.23.46 and license Apache-2.0 OR ISC OR MIT. The Linux resolver audit checks the Git source and full revision as well as the package version. The standalone Dioxus manifest continues to resolve registry rustls through its own graph. TLS 1.3-only REALITY configuration belongs to the separate REALITY integration lane.
+
+Cargo ignores SemVer build metadata in requirements. The TOML requirement is therefore 1.2.3 to avoid a Cargo manifest warning; the audited and locked package version remains 1.2.3+spec-1.1.0. smoltcp enables async and iface-max-addr-count-8 in addition to the requested IP/TCP/UDP/fragmentation features. quinn-proto explicitly disables default features.

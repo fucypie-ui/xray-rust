@@ -105,7 +105,8 @@ def main():
         releases = dict(executor.map(latest, sorted({entry["crate"] for entry in entries})))
     for entry in entries:
         entry.update(releases[entry["crate"]])
-        entry["requirement"] = ("=" if entry["previous_requirement"].startswith("=") else "") + entry["latest_stable"]
+        # Cargo ignores build metadata in requirements and warns if it is present.
+        entry["requirement"] = ("=" if entry["previous_requirement"].startswith("=") else "") + entry["latest_stable"].split("+", 1)[0]
     if args.update:
         for path in MANIFESTS:
             update_manifest(path, [entry for entry in entries if entry["manifest"] == str(path)])
