@@ -6,9 +6,27 @@ The companion `md/PARITY_MATRIX.md` is the capability ledger. It enumerates actu
 
 Only this file and `md/PARITY_MATRIX.md` were written by this audit. No local Rust/Cargo/Go installation, builds or tests were run; no manifest, lockfile, workflow, status document, production source, commit or push was made. Implementation/CI actions belong to parent-owned lanes; completed remote results are attributed to exact runs, remaining actions are handoffs, not local implementation/build/test actions by this audit. Existing concurrent work must be preserved.
 
-## Current verified Linux revision 98f42c8 — final frozen handoff
+## Current scoped Linux evidence: 1c938da
 
-**Tested Rust revision: `98f42c8419bdd75893de2b99f3c422f7c1a7b5a1`**, full identity verified with `git show` and both supplied result JSON files. This is the final latest checkpoint for these documents. The preceding `fd2d231`, `d977720`, `cf9510e` and `517a155` ledgers remain historical; their then-pending or failed results do not describe this snapshot.
+Tested Rust source: `1c938daac7a3105f64e8cc26c11e2dbe2cfcdc54`. Full parity and a new all-green integrated checkpoint are not established: ordinary CI has two failures, while the named live and byte gates pass.
+
+| Evidence | Exact-revision result | Boundary |
+| --- | --- | --- |
+| Rust CI 45900139028 | Locked all-target check, debug and release builds pass. Library: **1,171 passed / 2 failed / 18 ignored**; binary: **9/9 passed**. CLI comparison and documentation steps were skipped after the suite failed. | Failures: concurrent Mux carrier close returns BrokenPipe at server join; classic end-to-end scenario supplies obsolete inbound settings.servers rather than Go's top-level method/password. Neither failure is waived. |
+| Classic ordinary additions | **13 runtime + 5 configuration + 4 pooled-wrapper lifecycle tests passed**, included in the 1,171 library passes. | Maintained shadowsocks 1.25.0 engine; authentication, fragmentation, replay, native packet sources, cancellation, socket release, configured dispatch and wrapper lifecycle assertions. Broader account/UOT/transport composition gaps remain. |
+| Classic byte reference 45900139172 | Required Rust trait comparison: **1 passed / 0 failed / 0 ignored**; Go production generation and reverse decoding both pass for four AEAD methods, TCP and UDP. Downloaded artifact's three JSONL hashes verified. | Independent bytes, including Rust native UDP replies accepted by Go; **not live classic Go sessions**. |
+| Protocol interop 45900139064 | **17/17 selected live tests passed, zero ignored**: REALITY 3, WireGuard 8, Hysteria 2, mKCP 2, SS2022 2. Strict all-target Clippy passed. | The two SS2022 grouped UDP cases each exercise three single-user ciphers and both AES EIH configurations, totaling 60 exact request/reply pairs. |
+| SS2022 live boundary | Go production handlers exchange nonempty packets in both directions. Go-client empty packets use exported production UDP session APIs because pinned Process drops empty buffers. Address attribution, empty/large payloads, cancellation, close and socket release assertions execute. | No native relay UDP, live TCP SS2022, full option or configured routing/composition claim. |
+
+The shared-crypto compile failure at 292f689 and strict-lint failure at 1e8ae98 remain recorded in PORTING_STATUS and DEPENDENCY_UPGRADE. Source 1c938da includes both corrections; no warnings, mandatory gates or assertions were disabled. Root/desktop direct census is 74 entries / 71 unique registry packages, with the approved root rustls pin preserved.
+
+The following lanes remain outside this source snapshot: new classic live peers, native SS2022 relay UDP and replacement gRPC Gun transport. Their working-tree source receives no inherited passing evidence. The last fully passing integrated ordinary/live checkpoint remains 98f42c8 until both ordinary failures are resolved and the combined gates rerun.
+
+Raw evidence: /data/data/com.termux/files/usr/tmp/opencode/combined-1c938da/, including exact-SHA result JSON, full/clean logs, downloaded classic reference artifact and scoped-interop-reference-evidence.json. The isolated Mux close probe checks out the unchanged tested revision on Linux; its workflow-branch SHA must not be confused with the tested source SHA.
+
+## Historical verified Linux revision 98f42c8 — frozen audit handoff
+
+**Tested Rust revision: `98f42c8419bdd75893de2b99f3c422f7c1a7b5a1`**, full identity verified with `git show` and both supplied result JSON files. This was the latest fully passing checkpoint at the frozen audit handoff; the leading scoped evidence section records later execution. The preceding `fd2d231`, `d977720`, `cf9510e` and `517a155` ledgers remain historical; their then-pending or failed results do not describe this snapshot.
 
 | Executed evidence at 98f42c8 | Verified result | Scope / remaining acceptance |
 | --- | --- | --- |

@@ -98,7 +98,7 @@ async fn run(stream: BoxStream, limits: MuxLimits, mut requests: Option<mpsc::Re
     let (output, mut outgoing) = mpsc::channel::<Frame>(limits.frame_queue);
     let mut drivers = JoinSet::new();
     let mut children = JoinSet::new();
-    drivers.spawn(async move {
+    let read = async move {
         loop {
             match Frame::decode(&mut reader).await {
                 Ok(frame) => if frames.send(frame).await.is_err() { return Ok(()); },
@@ -106,11 +106,21 @@ async fn run(stream: BoxStream, limits: MuxLimits, mut requests: Option<mpsc::Re
                 Err(error) => return Err(error),
             }
         }
-    });
-    drivers.spawn(async move {
+    };
+    let write = async move {
         while let Some(frame) = outgoing.recv().await { frame.encode(&mut writer).await?; }
         writer.shutdown().await?;
         Ok(())
+    };
+    drivers.spawn(async move {
+        // Observe peer EOF before a simultaneously ready terminal write error.
+        // Separate tasks can report BrokenPipe before noticing peer closure.
+        // A live peer's write failures still propagate.
+        tokio::select! {
+            biased;
+            result = read => result,
+            result = write => result,
+        }
     });
     let mut sessions: HashMap<u16, Entry> = HashMap::new();
     let mut next_id = 0u16;

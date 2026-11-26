@@ -59,10 +59,8 @@ mod tests {
                 "listen": "127.0.0.1",
                 "protocol": "shadowsocks",
                 "settings": {
-                    "servers": [{
-                        "password": password,
-                        "method": method
-                    }]
+                    "password": password,
+                    "method": method
                 }
             }],
             "outbounds": [{ "tag": "direct", "protocol": "freedom" }]

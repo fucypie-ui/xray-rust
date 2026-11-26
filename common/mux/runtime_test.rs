@@ -4,10 +4,12 @@ use crate::common::net::{BoxStream, Destination, datagram::{BoxDatagram, Datagra
 use crate::common::protocol::SessionContext;
 use crate::features::inbound::InboundDispatcher;
 use async_trait::async_trait;
-use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+use std::pin::Pin;
+use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::mpsc;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream, ReadBuf};
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
 const WAIT: Duration = Duration::from_secs(5);
@@ -149,6 +151,66 @@ async fn concurrent_tcp_and_udp_sessions_preserve_bytes_packets_and_metadata() {
     client.close();
     timeout(WAIT, server).await.unwrap().unwrap().unwrap();
     assert_eq!(dispatcher.dropped.load(Ordering::SeqCst), 24);
+}
+
+// Keep the real duplex reader, but hold the first carrier write until the test
+// can make a terminal write failure and peer EOF ready in the same turn.
+struct BlockedCarrierWriter {
+    stream: DuplexStream,
+    blocked: Option<oneshot::Sender<Waker>>,
+    fail: Arc<AtomicBool>,
+}
+impl AsyncRead for BlockedCarrierWriter {
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buffer: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.stream).poll_read(cx, buffer)
+    }
+}
+impl AsyncWrite for BlockedCarrierWriter {
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, _buffer: &[u8]) -> Poll<std::io::Result<usize>> {
+        if self.fail.load(Ordering::SeqCst) { return Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into())); }
+        if let Some(blocked) = self.blocked.take() { let _ = blocked.send(cx.waker().clone()); }
+        Poll::Pending
+    }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.stream).poll_flush(cx)
+    }
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.stream).poll_shutdown(cx)
+    }
+}
+
+async fn pending_terminal_write_result(close_peer: bool) -> Result<()> {
+    let (mut client, stream) = tokio::io::duplex(1024);
+    let (blocked, waiting) = oneshot::channel();
+    let fail = Arc::new(AtomicBool::new(false));
+    let stream = BlockedCarrierWriter { stream, blocked: Some(blocked), fail: fail.clone() };
+    let (dispatcher, mut entered) = echo();
+    let server = tokio::spawn(serve_mux(Box::pin(stream), context(), dispatcher.clone()));
+    for id in 1..=2 {
+        Frame::new_session(id, target(id, false), Vec::new()).encode(&mut client).await.unwrap();
+        timeout(WAIT, entered.recv()).await.unwrap().unwrap();
+    }
+    // One child completes and queues END; the other remains stalled and must
+    // still be owned and cancelled when the carrier shuts down.
+    Frame::end(1).encode(&mut client).await.unwrap();
+    let writer = timeout(WAIT, waiting).await.unwrap().unwrap();
+    fail.store(true, Ordering::SeqCst);
+    // Queue the writer first, as in the failing independent-driver ordering.
+    writer.wake();
+    if close_peer { drop(client); }
+    let result = timeout(WAIT, server).await.unwrap().unwrap();
+    assert_eq!(dispatcher.dropped.load(Ordering::SeqCst), 2);
+    result
+}
+
+#[tokio::test]
+async fn peer_eof_cancels_pending_terminal_write_without_carrier_error() {
+    pending_terminal_write_result(true).await.unwrap();
+}
+
+#[tokio::test]
+async fn terminal_write_failure_with_open_peer_remains_carrier_error() {
+    assert!(matches!(pending_terminal_write_result(false).await, Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::BrokenPipe));
 }
 
 #[tokio::test]
