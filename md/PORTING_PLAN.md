@@ -22,6 +22,14 @@ A following source candidate replaces cloned listening sockets with revocable, p
 
 Evidence: `/data/data/com.termux/files/usr/tmp/opencode/combined-1f3ccf7/`, including exact-SHA job summaries, full logs, verified classic artifacts and `scoped-interop-reference-evidence.json`.
 
+## Follow-up native socket candidate: 60a0df2
+
+Rust CI `45903940071` at `60a0df20d755a394fc0db29593ae40ae1c09406f` passes locked checking, debug/release builds and nine binary tests, but ordinary library selection reports **1,185 passed / one failed / 23 ignored**. The failed new endpoint regression calls the pre-existing AES-only relay configuration helper for its ChaCha20 endpoint iteration and panics `relay is AES only`. The following correction constructs the endpoint configuration directly while preserving all three ciphers, both port-rebind assertions, and the original eight relay tests. Required relay/classic/CLI/docs steps after the failed suite are skipped and earn no execution credit.
+
+Isolated probe `45903977966`, workflow `14b9ee3164d0ad3a1e39f010ba0e43cc208cba16`, proves the actual old-runtime socket failure **15/15 times** across classic, SS2022 endpoint and SS2022 relay. On restored 60a0df2 source, classic passes ten selected invocations and relay passes ten; all ten endpoint invocations and the full relay module fail on the same ChaCha20 test setup, so the probe correctly fails (**20/31 fixed-source invocations pass**). Preserve this failed artifact as evidence; do not promote 60a0df2. Classic byte run `45903939973` passes its required trait test and production Go reverse decoding, and all three downloaded JSONL hashes/source pins match. Protocol/Clippy results are recorded separately when complete.
+
+No production socket code changes in the next correction; Gun and live multihop relay candidates remain separate pending integration. Latest fully passing scoped source remains 1f3ccf7.
+
 ## Previous validated checkpoint: 31b56a3
 
 Exact tested Rust source: `31b56a3e27e53da35b351025e120d5e71437f76b`. Rust CI **45901728795** passes locked all-target check, debug/release builds, **1,175 library / 9 binary tests**, **15 built-CLI comparisons / 21 argument-error checks**, and the documentation command (zero runnable cases). Ordinary library selection reports 18 ignored; these are not counted as executed passes. Protocol workflow **45901728777** passes strict all-target Clippy and **17 selected live tests**, all executed with zero ignored: REALITY 3, WireGuard 8, Hysteria 2, mKCP 2, SS2022 2. Classic independent-byte workflow **45901730474** passes its one mandatory Rust trait test and Go production reverse decoding for the four AEAD methods across TCP/UDP.

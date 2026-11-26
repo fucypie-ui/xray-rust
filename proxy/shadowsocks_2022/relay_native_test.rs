@@ -705,7 +705,12 @@ async fn ss2022_native_close_revokes_pending_accept_sockets() {
     tokio::time::timeout(WAIT, async {
         for method in [CipherMethod::Aes128Gcm, CipherMethod::Aes256Gcm, CipherMethod::ChaCha20Poly1305] {
             let keys = keys(method);
-            let server = Server::try_new("pending-accept", config(method, &keys[..1])).unwrap().with_network(Some("tcp,udp")).unwrap();
+            let config = Shadowsocks2022Config {
+                method: if method.is_chacha() { "2022-blake3-chacha20-poly1305" } else { method_name(method) }.into(),
+                key: base64::engine::general_purpose::STANDARD.encode(&keys[0]),
+                network: Some("tcp,udp".into()),
+            };
+            let server = Server::try_new("pending-accept", config).unwrap();
             assert_close_revokes_pending_accept_sockets(&server).await;
         }
     }).await.unwrap();
