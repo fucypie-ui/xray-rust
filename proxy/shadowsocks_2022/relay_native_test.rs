@@ -670,3 +670,43 @@ async fn ss2022_relay_native_unpolled_expiry_listener_drop_and_dispatch_completi
         }
     }).await.unwrap();
 }
+
+async fn assert_close_revokes_pending_accept_sockets(server: &dyn InboundHandler) {
+    let mut listener = server.bind_native(local()).await.unwrap().unwrap();
+    let address = listener.local_addr().unwrap();
+    let (dispatcher, _captures) = capture(None);
+    let mut accepting = listener.accept(dispatcher);
+    assert!(futures::poll!(accepting.as_mut()).is_pending(), "idle native accept must reach Pending");
+    server.close().await.unwrap();
+    // Keep the already-polled accept future alive and unpolled through both
+    // bind attempts: cancellation alone must not retain either listening port.
+    let udp_probe = UdpSocket::bind(address).await;
+    let tcp_probe = TcpListener::bind(address).await;
+    assert!(udp_probe.is_ok() && tcp_probe.is_ok(),
+        "pending accept retained bind at {address}: UDP={:?}, TCP={:?}",
+        udp_probe.as_ref().err(), tcp_probe.as_ref().err());
+    assert!(matches!(accepting.await, Err(Error::Closed)));
+    drop((udp_probe, tcp_probe));
+}
+
+#[tokio::test]
+async fn ss2022_relay_native_close_revokes_pending_accept_sockets() {
+    tokio::time::timeout(WAIT, async {
+        for method in AES {
+            let keys = keys(method);
+            let server = relay(method, &keys, target(), Some("tcp,udp"));
+            assert_close_revokes_pending_accept_sockets(&server).await;
+        }
+    }).await.unwrap();
+}
+
+#[tokio::test]
+async fn ss2022_native_close_revokes_pending_accept_sockets() {
+    tokio::time::timeout(WAIT, async {
+        for method in [CipherMethod::Aes128Gcm, CipherMethod::Aes256Gcm, CipherMethod::ChaCha20Poly1305] {
+            let keys = keys(method);
+            let server = Server::try_new("pending-accept", config(method, &keys[..1])).unwrap().with_network(Some("tcp,udp")).unwrap();
+            assert_close_revokes_pending_accept_sockets(&server).await;
+        }
+    }).await.unwrap();
+}

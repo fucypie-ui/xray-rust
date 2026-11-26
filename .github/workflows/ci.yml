@@ -63,7 +63,11 @@ jobs:
 
       - name: Require native SS2022 relay regression coverage
         timeout-minutes: 5
-        run: python3 .github/scripts/run-required-rust-tests.py proxy::shadowsocks_2022::relay_native_test 8
+        run: python3 .github/scripts/run-required-rust-tests.py proxy::shadowsocks_2022::relay_native_test 10
+
+      - name: Require classic retained-accept socket release
+        timeout-minutes: 5
+        run: python3 .github/scripts/run-required-rust-tests.py proxy::shadowsocks::runtime_test::classic_native_close_revokes_pending_accept_sockets 1
 
       - name: Compare built key commands with pinned Go vectors
         timeout-minutes: 5

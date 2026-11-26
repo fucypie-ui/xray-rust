@@ -779,3 +779,36 @@ async fn native_listener_drop_and_handler_close_release_unpolled_tcp_children() 
         }
     }).await.unwrap();
 }
+
+#[tokio::test]
+async fn classic_native_close_revokes_pending_accept_sockets() {
+    tokio::time::timeout(LIMIT, async {
+        for method in METHODS {
+            let server: Arc<dyn InboundHandler> = Arc::new(
+                Server::try_new("pending-accept", method, PASSWORD).unwrap()
+                    .with_networks(true, true).unwrap(),
+            );
+            let mut listener = server.bind_native("127.0.0.1:0".parse().unwrap())
+                .await.unwrap().unwrap();
+            let address = listener.local_addr().unwrap();
+            let mut pending_accept = Box::pin(listener.accept(Arc::new(Echo)));
+            futures::future::poll_fn(|cx| {
+                assert!(pending_accept.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            }).await;
+
+            server.close().await.unwrap();
+            // Keep the already-polled future alive and unpolled until both
+            // bound ports have been reclaimed by independent socket owners.
+            let tcp = TcpListener::bind(address).await.unwrap_or_else(|error| {
+                panic!("classic pending accept retained TCP listening port: {error:?}")
+            });
+            let udp = UdpSocket::bind(address).await.unwrap_or_else(|error| {
+                panic!("classic pending accept retained UDP listening port: {error:?}")
+            });
+            assert!(matches!(pending_accept.await, Err(Error::Closed)));
+            drop((tcp, udp));
+            assert!(matches!(server.bind_native(address).await, Err(Error::Closed)));
+        }
+    }).await.unwrap();
+}

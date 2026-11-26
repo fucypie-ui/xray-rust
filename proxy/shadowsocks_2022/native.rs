@@ -1,5 +1,5 @@
 //! Native, packet-preserving UDP boundary around the reviewed session engine.
-use std::{collections::{HashMap, HashSet}, io, net::SocketAddr, pin::Pin, sync::{Arc, Mutex, Weak}, task::{Context, Poll}, time::Duration};
+use std::{collections::{HashMap, HashSet}, future::poll_fn, io, net::SocketAddr, pin::Pin, sync::{Arc, Mutex, Weak}, task::{Context, Poll}, time::Duration};
 use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::{io::{AsyncRead, AsyncWrite, ReadBuf}, net::{TcpListener, TcpStream, UdpSocket}, sync::{mpsc, Mutex as AsyncMutex}, time::Instant};
@@ -31,8 +31,9 @@ impl NativeState {
 }
 
 struct Bindings {
-    udp: Mutex<Option<Arc<UdpSocket>>>,
-    tcp: Mutex<Option<Arc<TcpListener>>>,
+    udp: Mutex<Option<UdpSocket>>,
+    tcp: Mutex<Option<TcpListener>>,
+    udp_send: AsyncMutex<()>,
     cancelled: CancellationToken,
     connections: Mutex<Vec<Weak<TcpChild>>>,
 }
@@ -45,8 +46,36 @@ impl Bindings {
             connection.0.lock().unwrap_or_else(|error| error.into_inner()).take();
         }
     }
-    fn udp(&self) -> Result<Arc<UdpSocket>> {
-        self.udp.lock().map_err(|_| Error::Other("SS2022 UDP socket lock poisoned".into()))?.clone().ok_or(Error::Closed)
+    // Borrow each socket only during a poll. A suspended I/O future must not
+    // keep a listening port alive after stop() revokes its storage.
+    async fn accept(&self) -> Result<(TcpStream, SocketAddr)> {
+        poll_fn(|cx| {
+            let listener = self.tcp.lock().map_err(|_| Error::Other("SS2022 TCP socket lock poisoned".into()))?;
+            match listener.as_ref() {
+                Some(listener) => listener.poll_accept(cx).map_err(Error::from),
+                None if self.cancelled.is_cancelled() => Poll::Ready(Err(Error::Closed)),
+                None => Poll::Pending,
+            }
+        }).await
+    }
+    async fn recv_from(&self, bytes: &mut [u8]) -> Result<(usize, SocketAddr)> {
+        let mut buffer = ReadBuf::new(bytes);
+        let remote = poll_fn(|cx| {
+            let socket = self.udp.lock().map_err(|_| Error::Other("SS2022 UDP socket lock poisoned".into()))?;
+            let socket = socket.as_ref().ok_or(Error::Closed)?;
+            socket.poll_recv_from(cx, &mut buffer).map_err(Error::from)
+        }).await?;
+        Ok((buffer.filled().len(), remote))
+    }
+    async fn send_to(&self, bytes: &[u8], remote: SocketAddr) -> Result<usize> {
+        // poll_send_to retains only the latest send waker. Serialize writers
+        // without retaining a socket while a send or lock acquisition waits.
+        let _sending = self.udp_send.lock().await;
+        poll_fn(|cx| {
+            let socket = self.udp.lock().map_err(|_| Error::Other("SS2022 UDP socket lock poisoned".into()))?;
+            let socket = socket.as_ref().ok_or(Error::Closed)?;
+            socket.poll_send_to(cx, bytes, remote).map_err(Error::from)
+        }).await
     }
 }
 
@@ -85,11 +114,11 @@ async fn bind_sockets(networks: Networks, state: &NativeState, address: SocketAd
     if !networks.udp { return Ok(None); }
     // Bind both sockets before returning. Failure to bind UDP drops the TCP
     // listener too; port zero must choose one shared port, not two random ports.
-    let tcp = if networks.tcp { Some(Arc::new(TcpListener::bind(address).await?)) } else { None };
+    let tcp = if networks.tcp { Some(TcpListener::bind(address).await?) } else { None };
     let address = match &tcp { Some(listener) => listener.local_addr()?, None => address };
     let udp = UdpSocket::bind(address).await?;
     let address = udp.local_addr()?;
-    let bindings = Arc::new(Bindings { udp: Mutex::new(Some(Arc::new(udp))), tcp: Mutex::new(tcp), cancelled: state.cancelled.child_token(), connections: Mutex::new(Vec::new()) });
+    let bindings = Arc::new(Bindings { udp: Mutex::new(Some(udp)), tcp: Mutex::new(tcp), udp_send: AsyncMutex::new(()), cancelled: state.cancelled.child_token(), connections: Mutex::new(Vec::new()) });
     {
         let mut listeners = state.listeners.lock().map_err(|_| Error::Other("SS2022 listener lock poisoned".into()))?;
         if state.cancelled.is_cancelled() { bindings.stop(); return Err(Error::Closed); }
@@ -165,17 +194,13 @@ impl Listener {
 impl NativeInboundListener for Listener {
     fn local_addr(&self) -> Result<SocketAddr> { Ok(self.address) }
     async fn accept(&mut self, dispatcher: Arc<dyn InboundDispatcher>) -> Result<InboundTask> {
-        let udp = self.bindings.udp()?;
-        let tcp = self.bindings.tcp.lock().map_err(|_| Error::Other("SS2022 TCP socket lock poisoned".into()))?.clone();
         let mut buffer = vec![0; MAX_DATAGRAM_SIZE + 1];
         loop {
             if self.bindings.cancelled.is_cancelled() { return Err(Error::Closed); }
             tokio::select! {
                 _ = self.bindings.cancelled.cancelled() => return Err(Error::Closed),
                 _ = self.sweep.tick() => self.expire(),
-                accepted = async {
-                    match &tcp { Some(listener) => listener.accept().await, None => std::future::pending().await }
-                } => {
+                accepted = self.bindings.accept() => {
                     let (stream, remote) = accepted?;
                     let stream = Arc::new(TcpChild(Mutex::new(Some(stream))));
                     {
@@ -194,7 +219,7 @@ impl NativeInboundListener for Listener {
                         }
                     }));
                 }
-                received = udp.recv_from(&mut buffer) => {
+                received = self.bindings.recv_from(&mut buffer) => {
                     let (length, remote) = received?;
                     if length > MAX_DATAGRAM_SIZE { continue; }
                     // Malformed, unauthenticated and replayed packets are not
@@ -241,11 +266,10 @@ impl DatagramTransport for IncomingPackets {
         let source = packet.source.ok_or_else(|| Error::Protocol("SS2022 UDP reply requires its remote source".into()))?;
         if source.network != Network::Udp { return Err(Error::Protocol("SS2022 UDP reply source must use UDP".into())); }
         let (remote, wire) = self.server.reply(&self.token, source, &packet.payload)?;
-        let socket = self.bindings.udp()?;
         tokio::select! {
             biased;
             _ = self.cancelled.cancelled() => Err(Error::Closed),
-            written = socket.send_to(&wire, remote) => {
+            written = self.bindings.send_to(&wire, remote) => {
                 if written? != wire.len() { return Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "short SS2022 UDP response").into()); }
                 Ok(())
             }
@@ -361,17 +385,13 @@ impl RelayListener {
 impl NativeInboundListener for RelayListener {
     fn local_addr(&self) -> Result<SocketAddr> { Ok(self.address) }
     async fn accept(&mut self, dispatcher: Arc<dyn InboundDispatcher>) -> Result<InboundTask> {
-        let udp = self.bindings.udp()?;
-        let tcp = self.bindings.tcp.lock().map_err(|_| Error::Other("SS2022 relay TCP socket lock poisoned".into()))?.clone();
         let mut buffer = vec![0; MAX_DATAGRAM_SIZE + 1];
         loop {
             if self.bindings.cancelled.is_cancelled() { return Err(Error::Closed); }
             tokio::select! {
                 _ = self.bindings.cancelled.cancelled() => return Err(Error::Closed),
                 _ = self.sweep.tick() => self.expire(),
-                accepted = async {
-                    match &tcp { Some(listener) => listener.accept().await, None => std::future::pending().await }
-                } => {
+                accepted = self.bindings.accept() => {
                     let (stream, remote) = accepted?;
                     let stream = Arc::new(TcpChild(Mutex::new(Some(stream))));
                     {
@@ -390,7 +410,7 @@ impl NativeInboundListener for RelayListener {
                         }
                     }));
                 }
-                received = udp.recv_from(&mut buffer) => {
+                received = self.bindings.recv_from(&mut buffer) => {
                     let (length, remote) = received?;
                     if length > MAX_DATAGRAM_SIZE { continue; }
                     let incoming = match self.server.relay_datagram(&buffer[..length]) {
@@ -431,11 +451,10 @@ impl DatagramTransport for RelayPackets {
             if !peer.peers.contains(&packet.destination) { return Err(Error::Protocol("SS2022 relay reply is addressed to another association".into())); }
             peer.remote
         };
-        let socket = self.bindings.udp()?;
         tokio::select! {
             biased;
             _ = self.cancelled.cancelled() => Err(Error::Closed),
-            written = socket.send_to(&packet.payload, remote) => {
+            written = self.bindings.send_to(&packet.payload, remote) => {
                 if written? != packet.payload.len() { return Err(io::Error::new(io::ErrorKind::WriteZero, "short SS2022 relay UDP response").into()); }
                 self.peer.lock().map_err(|_| Error::Other("SS2022 relay peer lock poisoned".into()))?.active = Instant::now();
                 Ok(())

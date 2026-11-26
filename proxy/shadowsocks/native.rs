@@ -5,8 +5,8 @@ use crate::{
     features::inbound::{InboundDispatcher, InboundHandler, InboundTask, NativeInboundListener},
 };
 use async_trait::async_trait;
-use std::{collections::HashMap, net::SocketAddr, sync::{Arc, Mutex, Weak}, time::Duration};
-use tokio::{net::{TcpListener, TcpStream, UdpSocket}, sync::{mpsc, Mutex as AsyncMutex}, time::Instant};
+use std::{collections::HashMap, future::poll_fn, net::SocketAddr, sync::{Arc, Mutex, Weak}, task::Poll, time::Duration};
+use tokio::{io::ReadBuf, net::{TcpListener, TcpStream, UdpSocket}, sync::{mpsc, Mutex as AsyncMutex}, time::Instant};
 
 const MAX_FLOWS: usize = 256;
 const FLOW_QUEUE: usize = 32;
@@ -27,8 +27,9 @@ impl State {
 }
 
 struct Bindings {
-    tcp: Mutex<Option<Arc<TcpListener>>>,
-    udp: Mutex<Option<Arc<UdpSocket>>>,
+    tcp: Mutex<Option<TcpListener>>,
+    udp: Mutex<Option<UdpSocket>>,
+    udp_send: AsyncMutex<()>,
     closed: Closed,
     pending_tcp: Mutex<Vec<Weak<PendingTcp>>>,
 }
@@ -40,8 +41,36 @@ impl Bindings {
         let mut pending = self.pending_tcp.lock().unwrap_or_else(|error| error.into_inner());
         for stream in pending.drain(..).filter_map(|weak| weak.upgrade()) { drop(stream.take()); }
     }
-    fn udp(&self) -> Result<Arc<UdpSocket>> {
-        self.udp.lock().map_err(|_| Error::Other("Shadowsocks UDP socket lock poisoned".into()))?.clone().ok_or(Error::Closed)
+    // Socket ownership stays in revocable storage. Pending listener and send
+    // futures borrow a socket for one poll and cannot retain its port on close.
+    async fn accept(&self) -> Result<(TcpStream, SocketAddr)> {
+        poll_fn(|cx| {
+            let listener = self.tcp.lock().map_err(|_| Error::Other("Shadowsocks TCP listener lock poisoned".into()))?;
+            match listener.as_ref() {
+                Some(listener) => listener.poll_accept(cx).map_err(Error::from),
+                None if self.closed.is_cancelled() => Poll::Ready(Err(Error::Closed)),
+                None => Poll::Pending,
+            }
+        }).await
+    }
+    async fn recv_from(&self, bytes: &mut [u8]) -> Result<(usize, SocketAddr)> {
+        let mut buffer = ReadBuf::new(bytes);
+        let remote = poll_fn(|cx| {
+            let socket = self.udp.lock().map_err(|_| Error::Other("Shadowsocks UDP socket lock poisoned".into()))?;
+            let socket = socket.as_ref().ok_or(Error::Closed)?;
+            socket.poll_recv_from(cx, &mut buffer).map_err(Error::from)
+        }).await?;
+        Ok((buffer.filled().len(), remote))
+    }
+    async fn send_to(&self, bytes: &[u8], remote: SocketAddr) -> Result<usize> {
+        // Tokio stores one send waker per socket. Keep concurrent association
+        // replies serialized while holding no socket across a pending poll.
+        let _sending = self.udp_send.lock().await;
+        poll_fn(|cx| {
+            let socket = self.udp.lock().map_err(|_| Error::Other("Shadowsocks UDP socket lock poisoned".into()))?;
+            let socket = socket.as_ref().ok_or(Error::Closed)?;
+            socket.poll_send_to(cx, bytes, remote).map_err(Error::from)
+        }).await
     }
     fn register_tcp(&self, stream: TcpStream) -> Result<Arc<PendingTcp>> {
         let mut pending = self.pending_tcp.lock().map_err(|_| Error::Other("Shadowsocks TCP child lock poisoned".into()))?;
@@ -68,12 +97,12 @@ pub(super) async fn bind(
 ) -> Result<Box<dyn NativeInboundListener>> {
     if state.is_closed() { return Err(Error::Closed); }
     // Finish both binds before returning. Port zero must pick a shared port.
-    let tcp = if tcp { Some(Arc::new(TcpListener::bind(address).await?)) } else { None };
+    let tcp = if tcp { Some(TcpListener::bind(address).await?) } else { None };
     let address = match &tcp { Some(listener) => listener.local_addr()?, None => address };
     let udp = UdpSocket::bind(address).await?;
     let address = udp.local_addr()?;
     let bindings = Arc::new(Bindings {
-        tcp: Mutex::new(tcp), udp: Mutex::new(Some(Arc::new(udp))),
+        tcp: Mutex::new(tcp), udp: Mutex::new(Some(udp)), udp_send: AsyncMutex::new(()),
         closed: Closed::default(), pending_tcp: Mutex::new(Vec::new()),
     });
     {
@@ -150,17 +179,13 @@ impl Listener {
 impl NativeInboundListener for Listener {
     fn local_addr(&self) -> Result<SocketAddr> { Ok(self.address) }
     async fn accept(&mut self, dispatcher: Arc<dyn InboundDispatcher>) -> Result<InboundTask> {
-        let udp = self.bindings.udp()?;
-        let tcp = self.bindings.tcp.lock().map_err(|_| Error::Other("Shadowsocks TCP listener lock poisoned".into()))?.clone();
         let mut buffer = vec![0; MAX_DATAGRAM_SIZE + 1];
         loop {
             tokio::select! {
                 biased;
                 _ = self.bindings.closed.cancelled() => return Err(Error::Closed),
                 _ = self.sweep.tick() => self.expire(),
-                accepted = async {
-                    match &tcp { Some(listener) => listener.accept().await, None => std::future::pending().await }
-                } => {
+                accepted = self.bindings.accept() => {
                     let (stream, remote) = accepted?;
                     let stream = self.bindings.register_tcp(stream)?;
                     let server = self.server.clone();
@@ -174,7 +199,7 @@ impl NativeInboundListener for Listener {
                         }
                     }));
                 }
-                received = udp.recv_from(&mut buffer) => {
+                received = self.bindings.recv_from(&mut buffer) => {
                     let (length, remote) = received?;
                     let (destination, payload) = match self.codec.decode(&buffer[..length]) {
                         Ok(packet) => packet, Err(_) => continue,
@@ -215,12 +240,11 @@ impl DatagramTransport for Incoming {
         }
         let source: Destination = packet.source.ok_or_else(|| Error::Protocol("Shadowsocks UDP reply requires a source".into()))?;
         let wire = self.codec.encode(&source, &packet.payload)?;
-        let socket = self.bindings.udp()?;
         tokio::select! {
             biased;
             _ = self.bindings.closed.cancelled() => Err(Error::Closed),
             _ = self.closed.cancelled() => Err(Error::Closed),
-            written = socket.send_to(&wire, self.remote) => check_send(written?, wire.len()),
+            written = self.bindings.send_to(&wire, self.remote) => check_send(written?, wire.len()),
         }
     }
     async fn close(&self) -> Result<()> {
