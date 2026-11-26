@@ -100,4 +100,35 @@ mod tests {
         udp_conn.close().await;
         assert!(udp_conn.is_closed());
     }
+
+    #[tokio::test]
+    async fn test_close_cancels_core_dial_and_releases_both_ends() {
+        use std::time::Duration;
+        use tokio::net::TcpListener;
+        use tokio::sync::oneshot;
+        use tokio::time::timeout;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let peer = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut byte = [0];
+            stream.read_exact(&mut byte).await.unwrap();
+            assert_eq!(byte, [b'x']);
+            ready_tx.send(()).unwrap();
+            assert_eq!(stream.read(&mut byte).await.unwrap(), 0, "Close left the outbound dial connection alive");
+        });
+        let config: Config = serde_json::from_str(r#"{"outbounds":[{"protocol":"freedom"}]}"#).unwrap();
+        let instance = crate::core::Instance::from_config(config).unwrap();
+        let dest = Destination::tcp(Address::ip(address.ip()), address.port());
+        let mut connection = dial(&instance, &dest).await.unwrap();
+        connection.write_all(b"x").await.unwrap();
+        timeout(Duration::from_secs(5), ready_rx).await.unwrap().unwrap();
+        instance.close().unwrap();
+        let mut byte = [0];
+        assert_eq!(timeout(Duration::from_secs(5), connection.read(&mut byte)).await.unwrap().unwrap(), 0);
+        timeout(Duration::from_secs(5), peer).await.unwrap().unwrap();
+        assert!(matches!(dial(&instance, &dest).await, Err(crate::common::errors::Error::Closed)));
+    }
 }

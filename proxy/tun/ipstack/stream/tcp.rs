@@ -20,6 +20,7 @@ use std::{
     time::Duration,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::task::JoinSet;
 
 const TWO_MSL: Duration = Duration::from_secs(2);
 
@@ -125,7 +126,6 @@ pub struct IpStackTcpStream {
     data_rx: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
     read_notify: std::sync::Arc<std::sync::Mutex<Option<Waker>>>,
     task_handle: Option<tokio::task::JoinHandle<std::io::Result<()>>>,
-    exit_notifier: Option<tokio::sync::mpsc::Sender<()>>,
     temp_read_buffer: Vec<u8>,
     config: Arc<TcpConfig>,
 }
@@ -179,7 +179,6 @@ impl IpStackTcpStream {
             data_rx,
             read_notify: std::sync::Arc::new(std::sync::Mutex::new(None)),
             task_handle: None,
-            exit_notifier: None,
             temp_read_buffer: Vec::new(),
             config,
         };
@@ -382,14 +381,9 @@ impl Drop for IpStackTcpStream {
         let (nt, state) = (self.network_tuple(), self.tcb.lock().unwrap().get_state());
         log::trace!("{nt} {state:?}: [drop] session dropping, ========================= ");
         if let Some(task_handle) = self.task_handle.take() {
-            if !task_handle.is_finished() {
-                if let Some(notifier) = self.exit_notifier.take() {
-                    _ = tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(notifier.send(())));
-                }
-                _ = tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(task_handle));
-            } else {
-                log::trace!("{nt} {state:?}: [drop] task already finished, no need to wait exiting");
-            }
+            // Drop also runs during runner abort and on current-thread runtimes;
+            // blocking here can panic or deadlock teardown. The task owns its timers.
+            task_handle.abort();
         }
         let sessions = SESSION_COUNTER.fetch_sub(1, std::sync::atomic::Ordering::SeqCst).saturating_sub(1);
         log::debug!("{nt} {state:?}: [drop] session dropped, total TCP sessions: {sessions}");
@@ -409,10 +403,8 @@ impl IpStackTcpStream {
         let data_tx = self.data_tx.clone();
         let destroy_messenger = self.destroy_messenger.take();
 
-        let (exit_task_notifier, exit_monitor) = tokio::sync::mpsc::channel::<()>(10);
-        let exit_notifier = exit_task_notifier.clone();
+        let (exit_notifier, exit_monitor) = tokio::sync::mpsc::channel::<()>(10);
         let config = self.config.clone();
-        self.exit_notifier = Some(exit_task_notifier);
 
         let task_handle = tokio::spawn(async move {
             let v = tcp_main_logic_loop(
@@ -485,7 +477,7 @@ async fn tcp_main_logic_loop(
 
     let tcb_clone = tcb.clone();
 
-    async fn task_wait_to_close(tcb: TcbPtr, exit_notifier: tokio::sync::mpsc::Sender<()>, nt: NetworkTuple, two_msl: Duration) {
+    async fn task_wait_to_close(tcb: TcbPtr, exit_notifier: tokio::sync::mpsc::Sender<()>, nt: NetworkTuple, two_msl: Duration) -> std::io::Result<()> {
         tokio::time::sleep(two_msl).await;
         {
             let mut tcb = tcb.lock().unwrap();
@@ -494,6 +486,7 @@ async fn tcp_main_logic_loop(
             log::debug!("{nt} {state:?}: [task_wait_to_close] session closed after {two_msl:?}");
         }
         exit_notifier.send(()).await.unwrap_or(());
+        Ok(())
     }
 
     async fn task_last_ack(
@@ -503,13 +496,13 @@ async fn tcp_main_logic_loop(
         pkt_sdr: PacketSender,
         last_ack_timeout: Duration,
         last_ack_max_retries: usize,
-    ) {
+    ) -> std::io::Result<()> {
         let hint = "[task_last_ack]";
         for idx in 1..=last_ack_max_retries {
             let state = { tcb.lock().unwrap().get_state() };
             if state == TcpState::Closed {
                 log::debug!("{nt} {state:?}: {hint} session closed, exiting 1...");
-                return;
+                return Ok(());
             }
 
             tokio::time::sleep(last_ack_timeout).await;
@@ -519,7 +512,7 @@ async fn tcp_main_logic_loop(
                 let state = tcb.get_state();
                 if state == TcpState::Closed {
                     log::debug!("{nt} {state:?}: {hint} session closed, exiting 2...");
-                    return;
+                    return Ok(());
                 }
                 log::debug!("{nt} {state:?}: {hint} timer expired, resending ACK|FIN (retry {idx}/{last_ack_max_retries})");
                 _ = write_packet_to_device(&pkt_sdr, nt, &tcb, None, ACK | FIN, None, None);
@@ -532,6 +525,7 @@ async fn tcp_main_logic_loop(
             log::warn!("{nt} {state:?}: {hint} max retries reached, forcibly closing session");
         }
         exit_notifier.send(()).await.unwrap_or(());
+        Ok(())
     }
 
     async fn task_timed_out_for_close_wait(
@@ -545,34 +539,44 @@ async fn tcp_main_logic_loop(
     ) -> std::io::Result<()> {
         tokio::time::sleep(close_wait_timeout).await;
         let tcb_clone = tcb.clone();
-        let mut tcb = tcb.lock().unwrap();
-        let state = tcb.get_state();
-        if state != TcpState::CloseWait {
-            return Ok(());
+        {
+            let mut tcb = tcb.lock().unwrap();
+            let state = tcb.get_state();
+            if state != TcpState::CloseWait {
+                return Ok(());
+            }
+            log::warn!("{nt} {state:?}: Upstream timeout, forcing FIN");
+            write_packet_to_device(&up_packet_sender, nt, &tcb, None, ACK | FIN, None, None)?;
+            tcb.increase_seq();
+            tcb.change_state(TcpState::LastAck);
+            let new_state = tcb.get_state();
+            log::debug!("{nt} {state:?}: Forced transition to {new_state:?}");
         }
-        log::warn!("{nt} {state:?}: Upstream timeout, forcing FIN");
-        write_packet_to_device(&up_packet_sender, nt, &tcb, None, ACK | FIN, None, None)?;
-        tcb.increase_seq();
-        tcb.change_state(TcpState::LastAck);
-        let new_state = tcb.get_state();
-        log::debug!("{nt} {state:?}: Forced transition to {new_state:?}");
 
-        tokio::spawn(task_last_ack(
+        // Keep retries in this owned timer future instead of detaching a grandchild.
+        task_last_ack(
             tcb_clone,
             exit_notifier,
             nt,
             up_packet_sender,
             last_ack_timeout,
             last_ack_max_retries,
-        ));
-
-        Ok::<(), std::io::Error>(())
+        ).await
     }
 
+    let mut close_tasks = JoinSet::new();
     loop {
         let exit_notifier = exit_notifier.clone();
 
         let network_packet = tokio::select! {
+            completed = close_tasks.join_next(), if !close_tasks.is_empty() => {
+                match completed {
+                    Some(Ok(Err(error))) => log::debug!("{network_tuple} close timer error: {error}"),
+                    Some(Err(error)) => log::debug!("{network_tuple} close timer task failed: {error}"),
+                    _ => {}
+                }
+                continue;
+            }
             _ = exit_monitor.recv() => {
                 log::debug!("{network_tuple} task exited due to exit signal");
                 break;
@@ -696,7 +700,7 @@ async fn tcp_main_logic_loop(
                         log::trace!("{network_tuple} {s:?}: {l_info}, {pkt_type:?}, wait the last ack from the other side");
 
                         let up = up_packet_sender.clone();
-                        tokio::spawn(task_last_ack(
+                        close_tasks.spawn(task_last_ack(
                             tcb_clone.clone(),
                             exit_notifier,
                             network_tuple,
@@ -710,7 +714,7 @@ async fn tcp_main_logic_loop(
 
                         let tcb = tcb_clone.clone();
                         let up = up_packet_sender.clone();
-                        tokio::spawn(task_timed_out_for_close_wait(
+                        close_tasks.spawn(task_timed_out_for_close_wait(
                             tcb,
                             exit_notifier,
                             network_tuple,
@@ -739,7 +743,7 @@ async fn tcp_main_logic_loop(
                     log::trace!("{network_tuple} {state:?}: Received ACK|FIN, transitioned to {new_state:?}");
 
                     let up = up_packet_sender.clone();
-                    tokio::spawn(task_last_ack(
+                    close_tasks.spawn(task_last_ack(
                         tcb_clone.clone(),
                         exit_notifier,
                         network_tuple,
@@ -753,10 +757,11 @@ async fn tcp_main_logic_loop(
             }
             TcpState::LastAck if flags & ACK == ACK => {
                 tcb.change_state(TcpState::Closed);
-                tokio::spawn(async move {
+                close_tasks.spawn(async move {
                     if let Err(e) = exit_notifier.send(()).await {
                         log::debug!("exit_notifier send failed: {e}");
                     }
+                    Ok(())
                 });
                 let new_state = tcb.get_state();
                 log::trace!("{network_tuple} {state:?}: Received final ACK, transitioned to {new_state:?}");
@@ -767,7 +772,7 @@ async fn tcp_main_logic_loop(
                     write_packet_to_device(&up_packet_sender, network_tuple, &tcb, None, ACK, None, None)?;
                     tcb.change_state(TcpState::TimeWait);
 
-                    tokio::spawn(task_wait_to_close(tcb_clone.clone(), exit_notifier, network_tuple, config.two_msl));
+                    close_tasks.spawn(task_wait_to_close(tcb_clone.clone(), exit_notifier, network_tuple, config.two_msl));
                     let new_state = tcb.get_state();
                     log::trace!("{network_tuple} {state:?}: Final ACK|FIN received too early, transitioned to {new_state:?} directly");
                 } else if flags & ACK == ACK {
@@ -788,7 +793,7 @@ async fn tcp_main_logic_loop(
                     tcb.increase_ack();
                     write_packet_to_device(&up_packet_sender, network_tuple, &tcb, None, ACK, None, None)?;
                     tcb.change_state(TcpState::TimeWait);
-                    tokio::spawn(task_wait_to_close(tcb_clone.clone(), exit_notifier, network_tuple, config.two_msl));
+                    close_tasks.spawn(task_wait_to_close(tcb_clone.clone(), exit_notifier, network_tuple, config.two_msl));
                     let new_state = tcb.get_state();
                     log::trace!("{network_tuple} {state:?}: Received final ACK|FIN, transitioned to {new_state:?}");
                 } else if flags & ACK == ACK && len == 0 {
@@ -806,7 +811,7 @@ async fn tcp_main_logic_loop(
                     }
                     if flags & FIN == FIN {
                         tcb.change_state(TcpState::TimeWait);
-                        tokio::spawn(task_wait_to_close(tcb_clone.clone(), exit_notifier, network_tuple, config.two_msl));
+                        close_tasks.spawn(task_wait_to_close(tcb_clone.clone(), exit_notifier, network_tuple, config.two_msl));
                         let new_state = tcb.get_state();
                         log::trace!("{network_tuple} {state:?}: Received final ACK|FIN, transitioned to {new_state:?}");
                     }
@@ -967,3 +972,7 @@ pub(crate) fn create_raw_packet(
         payload: Some(payload),
     })
 }
+
+#[cfg(test)]
+#[path = "tcp_lifecycle_test.rs"]
+mod lifecycle_test;

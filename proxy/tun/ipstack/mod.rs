@@ -5,7 +5,7 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     select,
     sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
-    task::JoinHandle,
+    task::{JoinHandle, JoinSet},
 };
 
 pub(crate) type PacketSender = UnboundedSender<NetworkPacket>;
@@ -132,10 +132,17 @@ fn run<Device: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     let (up_pkt_sender, mut up_pkt_receiver) = mpsc::unbounded_channel::<NetworkPacket>();
 
     tokio::spawn(async move {
-        loop {
+        let mut session_tasks = JoinSet::new();
+        let result = loop {
             select! {
-                Ok(n) = device.read(&mut buffer) => {
-                    if let Err(e) = process_device_read(&buffer[offset..n], &mut sessions, &session_remove_tx, &up_pkt_sender, &config, &accept_sender).await {
+                _ = session_tasks.join_next(), if !session_tasks.is_empty() => {}
+                read = device.read(&mut buffer) => {
+                    let n = match read {
+                        Ok(0) => break Ok(()),
+                        Ok(n) => n,
+                        Err(error) => break Err(IpStackError::IoError(error)),
+                    };
+                    if let Err(e) = process_device_read(&buffer[offset..n], &mut sessions, &session_remove_tx, &up_pkt_sender, &config, &accept_sender, &mut session_tasks).await {
                         let io_err: std::io::Error = e.into();
                         if io_err.kind() == std::io::ErrorKind::ConnectionRefused {
                             log::trace!("Received junk data: {io_err}");
@@ -149,10 +156,16 @@ fn run<Device: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
                     log::debug!("session destroyed: {network_tuple}");
                 }
                 Some(packet) = up_pkt_receiver.recv() => {
-                    process_upstream_recv(packet, &mut device, #[cfg(unix)]pi).await?;
+                    if let Err(error) = process_upstream_recv(packet, &mut device, #[cfg(unix)]pi).await {
+                        break Err(error);
+                    }
                 }
             }
-        }
+        };
+        // EOF and I/O failures must close accept and release the device even
+        // while callers retain streams whose destroy notifications never arrive.
+        session_tasks.shutdown().await;
+        result
     })
 }
 
@@ -163,6 +176,7 @@ async fn process_device_read(
     up_pkt_sender: &PacketSender,
     config: &IpStackConfig,
     accept_sender: &UnboundedSender<IpStackStream>,
+    session_tasks: &mut JoinSet<()>,
 ) -> Result<()> {
     let Ok(packet) = NetworkPacket::parse(data) else {
         let stream = IpStackStream::UnknownNetwork(data.to_owned());
@@ -194,7 +208,7 @@ async fn process_device_read(
             let (tx, rx) = tokio::sync::oneshot::channel::<()>();
             let ip_stack_stream = create_stream(packet, config, up_pkt_sender.clone(), Some(tx))?;
             let session_remove_tx = session_remove_tx.clone();
-            tokio::spawn(async move {
+            session_tasks.spawn(async move {
                 rx.await.ok();
                 if let Err(e) = session_remove_tx.send(network_tuple) {
                     log::error!("Failed to send session removal for {network_tuple}: {e}");
@@ -253,3 +267,6 @@ async fn process_upstream_recv<Device: AsyncWrite + Unpin + 'static>(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod lifecycle_test;
