@@ -32,23 +32,32 @@ pub fn xor(data: &[u8], key: u8) -> Vec<u8> {
 }
 
 pub struct TestEnvironment {
+    instances: Vec<Instance>,
     tasks: Vec<JoinHandle<()>>,
 }
 
 impl TestEnvironment {
     pub fn new() -> Self {
-        Self { tasks: Vec::new() }
+        Self { instances: Vec::new(), tasks: Vec::new() }
     }
 
     pub async fn start_node(&mut self, config: Config) -> Result<()> {
         let instance = Instance::from_config(config)?;
         let mut handles = instance.start().await?;
+        // The instance owns cancellation rights; task handles alone do not keep
+        // a running node alive once Instance::drop performs shutdown.
+        self.instances.push(instance);
         self.tasks.append(&mut handles);
         tokio::time::sleep(Duration::from_millis(50)).await;
         Ok(())
     }
 
     pub fn close_all(&mut self) {
+        for instance in self.instances.drain(..) {
+            if let Err(error) = instance.close() {
+                tracing::warn!("test node cleanup failed: {}", error);
+            }
+        }
         for handle in self.tasks.drain(..) {
             handle.abort();
         }
