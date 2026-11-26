@@ -5,6 +5,6 @@ pub fn cmd_outbounds_list() -> Command {
     Command::new("list-outbounds", "xray api list-outbounds [-s=server:port]", "List active outbounds")
     .with_run(|args| {
         let client = ApiClientConfig::parse(args);
-        Ok(format!("list-outbounds request sent to {}", client.server))
+        client.unsupported("list-outbounds")
     })
 }

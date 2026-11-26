@@ -5,6 +5,6 @@ pub fn cmd_inbound_user_count() -> Command {
     Command::new("inbound-user-count", "xray api inbound-user-count [-s=server:port]", "Count users in an inbound")
     .with_run(|args| {
         let client = ApiClientConfig::parse(args);
-        Ok(format!("inbound-user-count request sent to {}", client.server))
+        client.unsupported("inbound-user-count")
     })
 }

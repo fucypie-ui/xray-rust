@@ -35,10 +35,14 @@ mod tests {
         let api_cmd = cmd_api();
         assert_eq!(api_cmd.name, "api");
         assert_eq!(api_cmd.subcommands.len(), 23);
-        let out = api_cmd.execute(&["query-stats", "-s=127.0.0.1:10086"]).unwrap();
-        assert!(out.contains("127.0.0.1:10086"));
+        let error = api_cmd.execute(&["query-stats", "-s=127.0.0.1:10086"]).unwrap_err().to_string();
+        assert!(error.contains("127.0.0.1:10086"));
+        assert!(error.contains("not implemented"));
+        for subcommand in &api_cmd.subcommands {
+            assert!(subcommand.execute(&[]).is_err(), "{} claimed success", subcommand.name);
+        }
         let cfg = ApiClientConfig::parse(&["-s=10.0.0.1:8080"]);
         assert_eq!(cfg.server, "10.0.0.1:8080");
-        assert_eq!(cfg.timeout, 5);
+        assert_eq!(cfg.timeout, 3);
     }
 }

@@ -5,6 +5,6 @@ pub fn cmd_stats_get() -> Command {
     Command::new("get-stats", "xray api get-stats [-s=server:port]", "Get traffic statistics for a name")
     .with_run(|args| {
         let client = ApiClientConfig::parse(args);
-        Ok(format!("get-stats request sent to {}", client.server))
+        client.unsupported("get-stats")
     })
 }

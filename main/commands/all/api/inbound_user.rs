@@ -5,6 +5,6 @@ pub fn cmd_inbound_user() -> Command {
     Command::new("inbound-user", "xray api inbound-user [-s=server:port]", "Inspect users in an inbound")
     .with_run(|args| {
         let client = ApiClientConfig::parse(args);
-        Ok(format!("inbound-user request sent to {}", client.server))
+        client.unsupported("inbound-user")
     })
 }

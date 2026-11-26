@@ -5,6 +5,6 @@ pub fn cmd_stats_online_ip_list() -> Command {
     Command::new("online-ip-list", "xray api online-ip-list [-s=server:port]", "List active IP addresses for user")
     .with_run(|args| {
         let client = ApiClientConfig::parse(args);
-        Ok(format!("online-ip-list request sent to {}", client.server))
+        client.unsupported("online-ip-list")
     })
 }
