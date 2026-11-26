@@ -44,10 +44,15 @@ inbound forwarding. netstack-smoltcp was considered but its forwarding-oriented
 API and early UDP packet extraction did not fit this outbound/reassembly path.
 Async socket wakers support the Tokio wrappers.
 
-smoltcp 0.14 does not emit IPv6 fragments. A small WireGuard-only adapter emits
-IPv6 UDP fragments using smoltcp's UDP checksum codec; every fragment still
-passes allowedIPs routing and Noise encryption. IPv4 fragmentation and inbound
-IPv4/IPv6 reassembly use smoltcp. AnyIP supports both families through the shared
+smoltcp 0.14's IP medium neither emits nor reassembles IPv6 fragments. A small
+WireGuard-only adapter emits IPv6 UDP fragments using smoltcp's UDP checksum
+codec; every fragment still passes allowedIPs routing and Noise encryption.
+Authenticated IPv6 ingress is reassembled before socket provisioning, then
+passed through smoltcp's ordinary transport/checksum validation. Reassembly
+allows at most 16 concurrent datagrams, 128 fragments per datagram and 65535
+IPv6 payload bytes, with a fixed 60-second lifetime. Overlap poisons the whole
+datagram until expiry; atomic fragments are processed independently. IPv4
+fragmentation and reassembly use smoltcp. AnyIP supports both families through the shared
 InterfaceInner::has_ip_addr check; no destination aliases are needed.
 
 Requested dependencies (default features disabled):
@@ -147,6 +152,18 @@ CI must require the variable and verify all eight test matches.
 No Rust/Cargo/Go commands, installations, builds or tests ran on the Android
 editing host. Remote Rust compile/test results must be recorded by the parent;
 this note describes implemented gates, not passing test results.
+
+Linux run 45893541110 at commit 517a155 executed all eight live WireGuard
+tests: three passed and five failed. Four Rust-to-Go cases failed before
+traffic because helper diagnostics polluted readiness stdout; reverse
+fragmented IPv6 UDP timed out. Ordinary Linux tests also timed out in
+encrypted dual-stack UDP loopback and native multi-destination UDP. Source
+inspection found that smoltcp's IP-medium IPv6 dispatch has no Fragment
+header branch, despite the `proto-ipv6-fragmentation` feature name. The
+WireGuard-local ingress adapter and helper stderr logger address those
+causes. Added regressions cover reordered ingress/socket provisioning, UDP
+checksum validation, overlap, expiry, atomic fragments and bounded buffers.
+These fixes require the next remote Linux round; no local toolchain was run.
 
 ## Remaining scope limits
 

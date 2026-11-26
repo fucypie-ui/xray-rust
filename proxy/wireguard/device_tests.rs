@@ -96,6 +96,47 @@ fn udp4(source: [u8;4], destination: [u8;4], payload: &[u8]) -> Vec<u8> {
     let builder = etherparse::PacketBuilder::ipv4(source, destination, 64).udp(12345, 9001);
     let mut packet = Vec::new(); builder.write(&mut packet, payload).unwrap(); packet
 }
+
+#[test]
+fn inbound_ipv6_fragments_reassemble_before_socket_provisioning_and_validate_udp_checksum() {
+    let source = "fd77::2".parse::<std::net::Ipv6Addr>().unwrap().octets();
+    let destination = "fd77::1".parse::<std::net::Ipv6Addr>().unwrap().octets();
+    let payload = (0..8192).map(|index| (index % 251) as u8).collect::<Vec<_>>();
+    let mut packet = Vec::new();
+    etherparse::PacketBuilder::ipv6(source, destination, 64).udp(12345, 9001)
+        .write(&mut packet, &payload).unwrap();
+    // Encode the RFC 8200 wire layout independently of the product fragmenter.
+    let fragments = packet[40..].chunks(1232).enumerate().map(|(index, chunk)| {
+        let mut fragment = packet[..40].to_vec();
+        fragment[4..6].copy_from_slice(&((chunk.len() + 8) as u16).to_be_bytes());
+        fragment[6] = 44;
+        fragment.extend_from_slice(&[17, 0]);
+        let offset = index * 1232;
+        let flags = offset as u16 | u16::from(offset + chunk.len() < packet.len() - 40);
+        fragment.extend_from_slice(&flags.to_be_bytes());
+        fragment.extend_from_slice(&0x12345678u32.to_be_bytes());
+        fragment.extend_from_slice(chunk);
+        fragment
+    }).collect::<Vec<_>>();
+    assert_eq!(fragments.len(), 7);
+    for valid_checksum in [true, false] {
+        let mut stack = Stack::new(&config(false, "").validated().unwrap(), true, 1).unwrap();
+        for (index, fragment) in fragments.iter().enumerate().rev() {
+            let mut fragment = fragment.clone();
+            if !valid_checksum && index == 0 { fragment[56] ^= 1; }
+            stack.ingest(fragment);
+            stack.poll(smoltcp::time::Instant::from_millis(0));
+            if index != 0 { assert!(stack.take_udp().is_empty()); }
+        }
+        let received = stack.take_udp();
+        if valid_checksum {
+            assert_eq!(received.len(), 1);
+            assert_eq!(received[0].data, payload);
+            assert_eq!(received[0].source, "[fd77::2]:12345".parse().unwrap());
+            assert_eq!(received[0].destination, "[fd77::1]:9001".parse().unwrap());
+        } else { assert!(received.is_empty(), "reassembly must preserve UDP checksum validation"); }
+    }
+}
 fn peers() -> (NoisePeers, NoisePeers, SocketAddr, SocketAddr) {
     let a: SocketAddr = "127.0.0.1:10001".parse().unwrap();
     let b: SocketAddr = "127.0.0.1:10002".parse().unwrap();
@@ -223,11 +264,13 @@ async fn real_encrypted_loopback_tcp_udp_dual_stack_mtu_fragmentation_and_empty_
         for length in [0, 1, 8192] {
             let payload = (0..length).map(|index| (index % 251) as u8).collect::<Vec<_>>();
             socket.send(&payload).await.unwrap();
-            let received = tokio::time::timeout(Duration::from_secs(10), server.recv_datagram()).await.unwrap().unwrap();
+            let received = tokio::time::timeout(Duration::from_secs(10), server.recv_datagram()).await
+                .unwrap_or_else(|_| panic!("UDP ingress timeout: destination={destination} payload_length={length}")).unwrap();
             assert_eq!(received.data, payload); assert_eq!(received.destination.port(), 9001);
             received.reply(&received.data).unwrap();
             let mut response = vec![0; 65535];
-            let len = tokio::time::timeout(Duration::from_secs(10), socket.recv(&mut response)).await.unwrap().unwrap();
+            let len = tokio::time::timeout(Duration::from_secs(10), socket.recv(&mut response)).await
+                .unwrap_or_else(|_| panic!("UDP reply timeout: destination={destination} payload_length={length}")).unwrap();
             assert_eq!(&response[..len], payload);
         }
     }
@@ -260,7 +303,8 @@ impl GoPeer {
         let stdout = child.stdout.take().unwrap();
         let mut reader = BufReader::new(stdout); let mut line = String::new();
         tokio::time::timeout(Duration::from_secs(15), reader.read_line(&mut line)).await.unwrap().unwrap();
-        let ready: GoReady = serde_json::from_str(&line).expect("Go readiness JSON");
+        let ready: GoReady = serde_json::from_str(&line)
+            .unwrap_or_else(|error| panic!("Go readiness JSON: {error}; stdout line: {line:?}"));
         assert_eq!(ready.public_key, vectors().bob_public);
         Self { child, ready }
     }
@@ -398,7 +442,8 @@ async fn native_datagrams_keep_boundaries_original_source_and_multiple_destinati
         let destination = super::super::datagram::udp_destination(target.parse().unwrap());
         let payload = vec![index as u8; if index == 0 { 0 } else { index * 2000 }];
         packets.send(Datagram { payload: payload.clone().into(), source: Some(source.clone()), destination: destination.clone() }).await.unwrap();
-        let response = tokio::time::timeout(Duration::from_secs(10), packets.recv()).await.unwrap().unwrap().unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(10), packets.recv()).await
+            .unwrap_or_else(|_| panic!("native UDP reply timeout: destination={target} payload_length={}", payload.len())).unwrap().unwrap();
         assert_eq!(response.payload.as_ref(), payload); assert_eq!(response.source, Some(destination));
         assert_eq!(response.destination, source);
     }

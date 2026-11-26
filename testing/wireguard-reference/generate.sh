@@ -13,7 +13,8 @@ source_dir=$(cd "$(dirname "$0")" && pwd)
 stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT
 cp "$reference/go.mod" "$reference/go.sum" "$stage/"
-cp "$source_dir/main.go" "$stage/main.go"
+cp "$source_dir/main.go" "$source_dir/main_test.go" "$stage/"
+(cd "$stage" && GOWORK=off go test -mod=mod ./main.go ./main_test.go)
 (cd "$stage" && GOWORK=off go build -mod=mod -o "$output/wireguard-reference" ./main.go)
 "$output/wireguard-reference" -mode vectors > "$output/wireguard-key-vectors.json"
 printf 'Go reference executable: %s/wireguard-reference\n' "$output"

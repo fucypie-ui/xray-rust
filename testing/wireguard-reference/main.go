@@ -10,6 +10,7 @@ import (
     "flag"
     "fmt"
     "io"
+    "log"
     "net"
     "net/netip"
     "os"
@@ -27,6 +28,13 @@ const bobSecret = "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e
 
 func fail(err error) { if err != nil { fmt.Fprintln(os.Stderr, err); os.Exit(1) } }
 func emit(value any) { fail(json.NewEncoder(os.Stdout).Encode(value)) }
+func referenceLogger(stderr io.Writer) *device.Logger {
+    // wireguard-go's NewLogger writes errors to stdout. A serving peer's
+    // initial keepalive has no known endpoint yet; that diagnostic must not
+    // precede the readiness JSON on the machine-readable stdout channel.
+    return &device.Logger{Verbosef: device.DiscardLogf,
+        Errorf: log.New(stderr, "go-reference: ", log.LstdFlags).Printf}
+}
 func public(secret string) string {
     key, err := hex.DecodeString(secret); fail(err)
     if len(key) != 32 { fail(fmt.Errorf("private key must be 32 bytes")) }
@@ -55,7 +63,7 @@ func main() {
     ips := []netip.Addr{}
     for _, text := range strings.Split(*addresses, ",") { ips = append(ips, netip.MustParseAddr(text)) }
     tun, stack, err := netstack.CreateNetTUN(ips, nil, *mtu); fail(err)
-    dev := device.NewDevice(tun, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "go-reference: "))
+    dev := device.NewDevice(tun, conn.NewDefaultBind(), referenceLogger(os.Stderr))
     defer dev.Close()
     ipc := fmt.Sprintf("private_key=%s\nlisten_port=0\npublic_key=%s\nreplace_allowed_ips=true\nallowed_ip=0.0.0.0/0\nallowed_ip=::/0\npersistent_keepalive_interval=%d\n", *secret, *peer, *keepalive)
     if *psk != "" { ipc += "preshared_key=" + *psk + "\n" }

@@ -4,6 +4,7 @@ pub mod config;
 pub mod device;
 mod datagram;
 mod dns;
+mod ipv6;
 mod native;
 pub mod gvisortun;
 pub mod server;

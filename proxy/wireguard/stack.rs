@@ -11,7 +11,7 @@ use smoltcp::{
     wire::{HardwareAddress, IpCidr, UdpPacket},
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use super::{config::ValidatedConfig, device::DeviceInner};
+use super::{config::ValidatedConfig, device::DeviceInner, ipv6::Ipv6Reassembler};
 
 const MAX_SOCKETS: usize = 256;
 const PACKET_QUEUE: usize = 256;
@@ -79,6 +79,7 @@ pub(crate) struct Stack {
     pending_tcp: HashMap<FlowKey, (SocketHandle, Instant)>,
     server_udp: HashMap<SocketAddr, (SocketHandle, Instant)>,
     next_fragment_id: u32,
+    ipv6_reassembly: Ipv6Reassembler,
     fragment_wakers: Vec<Waker>,
     server: bool,
     pub closed: bool,
@@ -107,7 +108,8 @@ impl Stack {
         Ok(Self { iface, sockets: SocketSet::new(Vec::new()), device,
             addresses: config.addresses.clone(), next_port: 49152 + (seed % 16384) as u16,
             ports: HashMap::new(), released_tcp: HashSet::new(), pending_tcp: HashMap::new(),
-            server_udp: HashMap::new(), next_fragment_id: seed as u32, fragment_wakers: Vec::new(), server, closed: false })
+            server_udp: HashMap::new(), next_fragment_id: seed as u32, ipv6_reassembly: Ipv6Reassembler::default(),
+            fragment_wakers: Vec::new(), server, closed: false })
     }
 
     fn ensure_capacity(&self) -> io::Result<()> {
@@ -154,6 +156,7 @@ impl Stack {
 
     pub fn ingest(&mut self, packet: Vec<u8>) {
         if self.closed || self.device.incoming.len() >= PACKET_QUEUE { return; }
+        let Some(packet) = self.ipv6_reassembly.process(packet, Instant::now()) else { return; };
         if self.server { self.prepare_inbound(&packet); }
         self.device.incoming.push_back(packet);
     }
@@ -244,8 +247,8 @@ impl Stack {
             } else { io_error(error.to_string()) })
     }
 
-    // smoltcp 0.14 reassembles IPv6 but does not emit IPv6 fragments. Adapt
-    // only that missing egress operation using its vetted UDP checksum codec.
+    // smoltcp 0.14's IP medium neither reassembles nor emits IPv6 fragments.
+    // Adapt egress using its UDP checksum codec; ipv6_reassembly handles ingress.
     // Every resulting IP fragment still traverses allowedIPs and Noise AEAD.
     fn fragment_udp6(&mut self, source: SocketAddr, destination: SocketAddr, data: &[u8]) -> io::Result<()> {
         let (SocketAddr::V6(source), SocketAddr::V6(destination)) = (source, destination) else {
@@ -287,6 +290,7 @@ impl Stack {
 
     fn cleanup(&mut self) {
         let now = Instant::now();
+        self.ipv6_reassembly.expire(now);
         let expired_tcp = self.pending_tcp.iter().filter_map(|(flow, (handle, created))| {
             (now.duration_since(*created) > Duration::from_secs(30)
                 || self.sockets.get::<tcp::Socket<'_>>(*handle).state() == tcp::State::Closed)
@@ -315,6 +319,7 @@ impl Stack {
 
     pub fn shutdown(&mut self) {
         self.closed = true;
+        self.ipv6_reassembly.clear();
         for waker in self.fragment_wakers.drain(..) { waker.wake(); }
         for (_, socket) in self.sockets.iter_mut() {
             if let Socket::Tcp(socket) = socket { socket.abort(); }
@@ -335,8 +340,9 @@ fn udp_socket() -> udp::Socket<'static> {
         udp::PacketBuffer::new(vec![udp::PacketMetadata::EMPTY; 32], vec![0; UDP_BUFFER]))
 }
 
-/// Inspect only the first fragment to provision a socket. smoltcp validates
-/// checksums, extension headers, fragmentation and transport state itself.
+/// Inspect transport headers to provision a socket. IPv6 fragments have
+/// already been reassembled; smoltcp validates checksums and transport state
+/// and handles IPv4 reassembly itself.
 fn transport_header(packet: &[u8]) -> Option<(FlowKey, u8, bool)> {
     let (source, destination, mut next, mut offset) = match packet.first()? >> 4 {
         4 if packet.len() >= 20 => {
