@@ -726,6 +726,10 @@ impl Config {
         for (i, in_cfg) in self.inbounds.into_iter().enumerate() {
             let tag = in_cfg.tag.unwrap_or_else(|| format!("inbound-{}", i));
             let proto = in_cfg.protocol.to_lowercase();
+            // Preserve SS2022 stream validation before the generic Gun role gate.
+            if proto == "shadowsocks" && super::grpc_runtime::selected(in_cfg.stream_settings.as_ref()) {
+                super::shadowsocks::build_2022_inbound(&tag, in_cfg.settings.as_ref(), in_cfg.stream_settings.as_ref())?;
+            }
             super::grpc_runtime::validate_role(&proto, in_cfg.stream_settings.as_ref(), true)?;
             if super::grpc_runtime::selected(in_cfg.stream_settings.as_ref()) {
                 super::grpc_runtime::validate_protocol_options(&proto, in_cfg.settings.as_ref())?;

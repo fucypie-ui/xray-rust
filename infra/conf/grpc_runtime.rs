@@ -284,7 +284,7 @@ impl InboundHandler for GrpcInbound {
         let listeners: Vec<_> = self.listeners.lock().unwrap_or_else(|error| error.into_inner()).iter().filter_map(Weak::upgrade).collect();
         let mut result = Ok(());
         for listener in listeners {
-            if let Err(error) = listener.close().await { if result.is_ok() { result = Err(error); } }
+            if let Err(error) = listener.close().await && result.is_ok() { result = Err(error); }
         }
         let inner = self.inner.close().await;
         result.and(inner)
