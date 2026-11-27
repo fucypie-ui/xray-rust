@@ -244,7 +244,7 @@ fn query(package: &str, field: &str, value: &str) -> DynamicMessage {
 fn extension_query(package: &str, name: &str, number: i32) -> DynamicMessage {
     let mut extension = message(package, "ExtensionRequest");
     extension.set_field_by_name("containing_type", Value::String(name.into()));
-    extension.set_field_by_name("extension_number", Value::I32(number));
+    if number != 0 { extension.set_field_by_name("extension_number", Value::I32(number)); }
     let mut input = message(package, "ServerReflectionRequest");
     input.set_field_by_name("host", Value::String("reflection.example:443".into()));
     input.set_field_by_name("file_containing_extension", Value::Message(extension)); input
