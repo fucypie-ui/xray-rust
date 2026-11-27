@@ -250,7 +250,7 @@ fn extension_query(package: &str, name: &str, number: i32) -> DynamicMessage {
     input.set_field_by_name("file_containing_extension", Value::Message(extension)); input
 }
 fn nested(input: &DynamicMessage, field: &str) -> DynamicMessage { input.get_field_by_name(field).unwrap().as_message().unwrap().clone() }
-fn list(input: &DynamicMessage, field: &str) -> Vec<Value> { input.get_field_by_name(field).unwrap().as_list().unwrap().clone() }
+fn list(input: &DynamicMessage, field: &str) -> Vec<Value> { input.get_field_by_name(field).unwrap().as_list().unwrap().to_vec() }
 fn services(input: &DynamicMessage) -> Vec<String> {
     assert!(input.has_field_by_name("list_services_response"));
     list(&nested(input, "list_services_response"), "service").iter().map(|service| string_field(service.as_message().unwrap(), "name")).collect()
