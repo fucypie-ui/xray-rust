@@ -77,6 +77,10 @@ jobs:
         timeout-minutes: 10
         run: python3 .github/scripts/run-required-rust-tests.py infra::conf::grpc_runtime::tests 20
 
+      - name: Require configured API reflection streaming coverage
+        timeout-minutes: 15
+        run: python3 .github/scripts/run-required-rust-tests.py infra::conf::runtime::services::reflection::reflection_test 29
+
       - name: Compare built key commands with pinned Go vectors
         timeout-minutes: 5
         run: python3 .github/scripts/check-key-cli-parity.py target/debug/xray testing/crypto-reference/vectors.json

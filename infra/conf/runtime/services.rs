@@ -12,6 +12,8 @@ use super::super::{api::ApiConfig, metrics::MetricsConfig, native};
 
 type RpcResult = std::result::Result<Value, (u32, String)>;
 
+#[path = "reflection.rs"] mod reflection;
+
 pub(super) struct RootServices {
     stats: Arc<DefaultStatsManager>,
     stats_enabled: bool,
@@ -240,6 +242,9 @@ async fn grpc(stream: BoxStream, services: Arc<RootServices>, enabled: Vec<Strin
 }
 
 async fn grpc_request(request: http::Request<h2::RecvStream>, mut response: h2::server::SendResponse<Bytes>, services: &RootServices, enabled: &[String]) -> Result<()> {
+    if reflection::matches(request.uri().path()) {
+        return reflection::serve(request, response, enabled).await;
+    }
     let path = request.uri().path().trim_start_matches('/').to_string();
     let result: std::result::Result<Vec<u8>,(u32,String)> = async {
         let (service,method) = path.rsplit_once('/').ok_or_else(|| (12,"unknown service".into()))?;

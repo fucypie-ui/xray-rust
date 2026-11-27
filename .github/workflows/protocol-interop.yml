@@ -58,6 +58,10 @@ jobs:
             filter: transport::internet::grpc::go_peer_test
             minimum: 3
             mode: --ignored
+          - engine: api-reflection
+            filter: infra::conf::runtime::services::reflection::go_peer_test
+            minimum: 3
+            mode: --ignored
     defaults:
       run:
         shell: bash
@@ -129,6 +133,11 @@ jobs:
               bash testing/grpc-reference/build-peer.sh "$GITHUB_WORKSPACE/go-reference" "$output_directory/grpc-go-peer"
               test -x "$output_directory/grpc-go-peer"
               printf 'XRAY_GRPC_GO_PEER=%s/grpc-go-peer\n' "$output_directory" >> "$GITHUB_ENV"
+              ;;
+            api-reflection)
+              bash testing/api-reflection-reference/build-peer.sh "$GITHUB_WORKSPACE/go-reference" "$output_directory/api-reflection-go-peer"
+              test -x "$output_directory/api-reflection-go-peer"
+              printf 'XRAY_API_REFLECTION_GO_PEER=%s/api-reflection-go-peer\n' "$output_directory" >> "$GITHUB_ENV"
               ;;
             *) exit 2 ;;
           esac
