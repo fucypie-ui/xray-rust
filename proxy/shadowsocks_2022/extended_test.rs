@@ -202,8 +202,127 @@ fn ss2022_udp_server_session_rotation_and_authentication_before_mutation() {
     assert!(client.decode_at(&response(3,0,1089,123),1089).is_err()); client.decode_at(&response(3,0,1090,123),1090).unwrap();
     // Session 2 is the old session after rotation. Its age is over 60 seconds.
     assert!(client.decode_at(&response(2,1,1091,123),1091).is_err());
-    // Go clears that expired slot, allowing another authenticated rotation.
+    // Retain the expired slot so another packet cannot re-admit the same session.
+    assert!(client.decode_at(&response(2,1,1091,123),1091).is_err());
+    // A distinct authenticated session can still rotate after the old age limit.
     client.decode_at(&response(1,2,1091,123),1091).unwrap();
+}
+
+#[test]
+fn ss2022_upstream_dns_padding_budget_all_methods() {
+    for method in METHODS {
+        let keys = vec![vec![1; method.key_length()]];
+        let codec = PacketCodec::new(method, keys.clone()).unwrap();
+        let mut client = ClientUdpSession::with_session_id(method, keys, 123).unwrap();
+        let mut destination = udp_destination();
+        destination.port = 53;
+        for length in [0, 1, 899, 900, 901] {
+            let payload = vec![7; length];
+            let unpadded = client.encode_at(destination.clone(), &payload, stream::unix_time().unwrap(), &[], &[0; 24]).unwrap();
+            // Exercise the actual automatic random-padding branch, checking its range.
+            for _ in 0..32 {
+                let wire = client.encode(destination.clone(), &payload).unwrap();
+                let padding = wire.len().checked_sub(unpadded.len()).unwrap();
+                if length < stream::MAX_PADDING_LENGTH {
+                    assert!((1..=stream::MAX_PADDING_LENGTH - length).contains(&padding));
+                    assert!(length + padding <= stream::MAX_PADDING_LENGTH);
+                } else {
+                    assert_eq!(padding, 0);
+                }
+                assert!(wire.len() <= MAX_DATAGRAM_SIZE);
+                let packet = codec.decode_at(&wire, HEADER_TYPE_CLIENT, stream::unix_time().unwrap()).unwrap();
+                assert_eq!(packet.destination, destination);
+                assert_eq!(packet.payload, payload);
+            }
+        }
+        let payload = vec![7; 899];
+        let unpadded = client.encode_at(destination.clone(), &payload, stream::unix_time().unwrap(), &[], &[0; 24]).unwrap();
+        // Explicit caller-supplied padding and decoder acceptance are unchanged.
+        let explicit = client.encode_at(destination.clone(), &payload, stream::unix_time().unwrap(), &[0; stream::MAX_PADDING_LENGTH], &[0; 24]).unwrap();
+        assert_eq!(explicit.len(), unpadded.len() + stream::MAX_PADDING_LENGTH);
+        assert_eq!(codec.decode_at(&explicit, HEADER_TYPE_CLIENT, stream::unix_time().unwrap()).unwrap().payload, payload);
+        destination.port = 443;
+        let unpadded = client.encode_at(destination.clone(), &payload, stream::unix_time().unwrap(), &[], &[0; 24]).unwrap();
+        for _ in 0..32 {
+            let wire = client.encode(destination.clone(), &payload).unwrap();
+            assert_eq!(wire.len(), unpadded.len());
+            assert_eq!(codec.decode_at(&wire, HEADER_TYPE_CLIENT, stream::unix_time().unwrap()).unwrap().payload, payload);
+        }
+    }
+}
+
+#[test]
+fn ss2022_upstream_expired_old_session_is_not_readmitted_all_methods() {
+    for method in METHODS {
+        let keys = vec![vec![1; method.key_length()]];
+        let codec = PacketCodec::new(method, keys.clone()).unwrap();
+        let mut client = ClientUdpSession::with_session_id(method, keys, 123).unwrap();
+        let response = |session_id, packet_id, now, client_id| codec.encode_at(&DecodedPacket {
+            session_id, packet_id, header_type: HEADER_TYPE_SERVER, timestamp: now,
+            client_session_id: Some(client_id), destination: udp_destination(), payload: vec![1],
+        }, &[], &[0; 24]).unwrap();
+        client.decode_at(&response(1, 0, 1000, 123), 1000).unwrap();
+        client.decode_at(&response(2, 0, 1000, 123), 1000).unwrap();
+        let expired = response(1, 1, 1061, 123);
+        for _ in 0..3 {
+            assert_eq!(client.decode_at(&expired, 1061).unwrap_err().to_string(), "old UDP server session expired");
+        }
+        let mut corrupt = response(3, u64::MAX, 1061, 123);
+        *corrupt.last_mut().unwrap() ^= 1;
+        assert!(client.decode_at(&corrupt, 1061).is_err());
+        assert_eq!(client.decode_at(&response(3, u64::MAX, 1061, 124), 1061).unwrap_err().to_string(), "UDP client session ID mismatch");
+        // Rejections preserve the current session and its existing replay bits.
+        client.decode_at(&response(2, 1, 1061, 123), 1061).unwrap();
+        assert_eq!(client.decode_at(&response(2, 0, 1061, 123), 1061).unwrap_err().to_string(), "UDP packet ID not unique");
+        // A clock step back exposes the retained old replay window at the exact boundary.
+        assert_eq!(client.decode_at(&response(1, 0, 1060, 123), 1060).unwrap_err().to_string(), "UDP packet ID not unique");
+        client.decode_at(&response(1, 1, 1060, 123), 1060).unwrap();
+        // Fresh IDs rejected while expired were not consumed; refreshing old blocks a third ID.
+        assert_eq!(client.decode_at(&response(3, 0, 1119, 123), 1119).unwrap_err().to_string(), "UDP server rotated sessions too quickly");
+        client.decode_at(&response(3, 0, 1120, 123), 1120).unwrap();
+        client.decode_at(&response(3, 1, 1120, 123), 1120).unwrap();
+        client.decode_at(&response(2, 2, 1120, 123), 1120).unwrap();
+        assert_eq!(client.decode_at(&response(2, 2, 1120, 123), 1120).unwrap_err().to_string(), "UDP packet ID not unique");
+    }
+}
+
+#[test]
+fn ss2022_upstream_server_rotation_sixty_second_boundaries_all_methods() {
+    for method in METHODS {
+        let keys = vec![vec![1; method.key_length()]];
+        let codec = PacketCodec::new(method, keys.clone()).unwrap();
+        let response = |session_id, packet_id, now| codec.encode_at(&DecodedPacket {
+            session_id, packet_id, header_type: HEADER_TYPE_SERVER, timestamp: now,
+            client_session_id: Some(123), destination: udp_destination(), payload: vec![1],
+        }, &[], &[0; 24]).unwrap();
+        for age in [59, 60, 61] {
+            let now = 1000 + age;
+            let mut client = ClientUdpSession::with_session_id(method, keys.clone(), 123).unwrap();
+            client.decode_at(&response(1, 0, 1000), 1000).unwrap();
+            client.decode_at(&response(2, 0, 1000), 1000).unwrap();
+            let old = client.decode_at(&response(1, 1, now), now);
+            if age <= 60 {
+                old.unwrap();
+                assert_eq!(client.decode_at(&response(1, 1, now), now).unwrap_err().to_string(), "UDP packet ID not unique");
+            } else {
+                assert_eq!(old.unwrap_err().to_string(), "old UDP server session expired");
+                assert_eq!(client.decode_at(&response(1, 1, now), now).unwrap_err().to_string(), "old UDP server session expired");
+            }
+            client.decode_at(&response(2, 1, now), now).unwrap();
+            // Test third-session admission independently of the old packet refreshing last_seen.
+            let mut client = ClientUdpSession::with_session_id(method, keys.clone(), 123).unwrap();
+            client.decode_at(&response(1, 0, 1000), 1000).unwrap();
+            client.decode_at(&response(2, 0, 1000), 1000).unwrap();
+            let third = client.decode_at(&response(3, 0, now), now);
+            if age < 60 {
+                assert_eq!(third.unwrap_err().to_string(), "UDP server rotated sessions too quickly");
+                client.decode_at(&response(3, 0, 1060), 1060).unwrap();
+            } else {
+                third.unwrap();
+                assert_eq!(client.decode_at(&response(3, 0, now), now).unwrap_err().to_string(), "UDP packet ID not unique");
+            }
+        }
+    }
 }
 
 #[tokio::test]

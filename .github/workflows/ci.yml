@@ -47,6 +47,9 @@ jobs:
           rustc --version --verbose
           cargo --version --verbose
 
+      - name: Check mandatory test gate target selection
+        run: python3 .github/scripts/test-required-rust-tests.py
+
       - name: Check all targets with locked dependencies
         timeout-minutes: 20
         run: cargo check --locked --all-targets
@@ -64,6 +67,10 @@ jobs:
       - name: Require native SS2022 relay regression coverage
         timeout-minutes: 5
         run: python3 .github/scripts/run-required-rust-tests.py proxy::shadowsocks_2022::relay_native_test 10
+
+      - name: Require upstream SS2022 padding and session regressions
+        timeout-minutes: 5
+        run: python3 .github/scripts/run-required-rust-tests.py proxy::shadowsocks_2022::extended_test::ss2022_upstream_ 3
 
       - name: Require classic retained-accept socket release
         timeout-minutes: 5

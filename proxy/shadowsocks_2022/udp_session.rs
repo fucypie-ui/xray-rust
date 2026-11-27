@@ -53,7 +53,7 @@ impl ClientUdpSession {
     }
     pub fn session_id(&self) -> u64 { self.session_id }
     pub fn encode(&mut self, destination: Destination, payload: &[u8]) -> io::Result<Vec<u8>> {
-        let padding_length = if destination.port == 53 && payload.len() < MAX_PADDING_LENGTH { rand::rng().random_range(1..=MAX_PADDING_LENGTH) } else { 0 };
+        let padding_length = if destination.port == 53 && payload.len() < MAX_PADDING_LENGTH { rand::rng().random_range(1..=(MAX_PADDING_LENGTH - payload.len())) } else { 0 };
         self.encode_at(destination, payload, unix_time()?, &vec![0; padding_length], &random_nonce()?)
     }
     pub fn encode_at(&mut self, destination: Destination, payload: &[u8], now: u64, padding: &[u8], nonce: &[u8; PACKET_NONCE_SIZE]) -> io::Result<Vec<u8>> {
@@ -70,7 +70,6 @@ impl ClientUdpSession {
         let is_current = self.current.as_ref().is_some_and(|peer| peer.session_id == packet.session_id);
         let is_old = self.old.as_ref().is_some_and(|peer| peer.session_id == packet.session_id);
         if is_old && self.old.as_ref().is_some_and(|old| now.saturating_sub(old.last_seen) > 60) {
-            self.old = None;
             return Err(invalid_data("old UDP server session expired"));
         }
         let peer = if is_current {

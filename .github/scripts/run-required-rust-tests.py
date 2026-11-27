@@ -10,14 +10,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("filter")
     parser.add_argument("minimum", type=int)
+    parser.add_argument("--test", dest="integration", metavar="NAME", help="Run one integration target instead of the library")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--ignored", action="store_true")
     mode.add_argument("--include-ignored", action="store_true")
     args = parser.parse_args()
     if args.minimum < 1:
         parser.error("minimum must be positive")
+    if args.integration is not None and not args.integration:
+        parser.error("--test NAME must not be empty")
+    target = ["--test", args.integration] if args.integration is not None else ["--lib"]
     command = [
-        "cargo", "test", "--locked", "--lib", args.filter,
+        "cargo", "test", "--locked", *target, args.filter,
         "--", "--nocapture", "--test-threads=1",
     ]
     if args.ignored:
