@@ -10,6 +10,7 @@ pub mod dokodemo;
 pub mod fakedns;
 pub mod freedom;
 pub mod grpc;
+pub(crate) mod grpc_runtime;
 pub mod http;
 pub mod hysteria;
 pub(crate) mod hysteria_runtime;

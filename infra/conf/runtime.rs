@@ -69,6 +69,11 @@ impl RootRuntime {
     }
 
     pub fn outbound_dialer(&mut self, protocol: &str, stream: Option<&super::StreamSettingsConfig>) -> Result<Option<Arc<dyn crate::transport::internet::dialer::Dialer>>> {
+        if let Some(stream) = stream.filter(|stream| super::grpc_runtime::selected(Some(stream))) {
+            let (dialer, feature) = super::grpc_runtime::outbound(protocol, stream)?;
+            self.features.push(feature);
+            return Ok(Some(dialer));
+        }
         let Some(stream) = stream.filter(|stream| matches!(stream.network.as_deref(), Some("kcp" | "mkcp"))) else { return Ok(None); };
         if !matches!(protocol.to_ascii_lowercase().as_str(), "vless" | "vmess" | "trojan" | "socks" | "http") {
             return Err(Error::Unsupported(format!("KCP base transport is not implemented for {}", protocol)));
@@ -77,6 +82,12 @@ impl RootRuntime {
         let dialer = crate::transport::internet::kcp::dialer::ConfiguredKcpDialer::new(stream.kcp_settings.clone().unwrap_or_default(), cancellation.clone())?;
         self.features.push(Arc::new(KcpLifecycle(cancellation)));
         Ok(Some(Arc::new(dialer)))
+    }
+
+    pub fn grpc_inbound(&mut self, handler: Arc<dyn crate::features::inbound::InboundHandler>, protocol: &str, stream: &super::StreamSettingsConfig) -> Result<Arc<dyn crate::features::inbound::InboundHandler>> {
+        let (handler, feature) = super::grpc_runtime::inbound(handler, protocol, stream)?;
+        self.features.push(feature);
+        Ok(handler)
     }
 
     pub fn wire(&mut self, outbounds: &mut HashMap<String, Arc<dyn OutboundHandler>>) -> Result<Option<Arc<crate::app::observatory::Observatory>>> {

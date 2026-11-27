@@ -93,6 +93,8 @@ pub struct OutboundConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamSettingsConfig {
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
     #[serde(default, rename = "hysteriaSettings")]
     pub hysteria_settings: Option<serde_json::Value>,
     #[serde(default, rename = "kcpSettings")]
@@ -165,6 +167,8 @@ pub struct WsSettingsConfig {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TlsCertificateConfig {
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
     #[serde(default, rename = "certificateFile")]
     pub certificate_file: Option<String>,
     #[serde(default, rename = "keyFile")]
@@ -177,6 +181,8 @@ pub struct TlsCertificateConfig {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TlsSettingsConfig {
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
     #[serde(default, rename = "serverName")]
     pub server_name: Option<String>,
     #[serde(default, rename = "allowInsecure")]
@@ -582,8 +588,15 @@ impl Config {
         let mut dns_client = build_dns_client(self.dns.as_ref());
         if let Some(holder) = &runtime.fake_dns { dns_client.set_fakedns_holder(holder.clone()); }
         let dns_client = Arc::new(dns_client);
-        for (i, out_cfg) in self.outbounds.into_iter().enumerate() {
+        for (i, mut out_cfg) in self.outbounds.into_iter().enumerate() {
             let base_dialer = runtime.outbound_dialer(&out_cfg.protocol, out_cfg.stream_settings.as_ref())?;
+            if super::grpc_runtime::selected(out_cfg.stream_settings.as_ref()) {
+                if out_cfg.mux.as_ref().is_some_and(|mux| !mux.is_null() && mux.get("enabled").and_then(serde_json::Value::as_bool) != Some(false)) {
+                    return Err(Error::Unsupported("gRPC outbound mux settings are not implemented".into()));
+                }
+                super::grpc_runtime::validate_protocol_options(&out_cfg.protocol, out_cfg.settings.as_ref())?;
+                if let Some(stream) = out_cfg.stream_settings.as_mut() { super::grpc_runtime::consume_security(stream); }
+            }
             let tag = out_cfg.tag.unwrap_or_else(|| format!("outbound-{}", i));
             if default_outbound_tag.is_none() { default_outbound_tag = Some(tag.clone()); }
             let handler: Arc<dyn OutboundHandler> = match out_cfg.protocol.to_lowercase().as_str() {
@@ -713,6 +726,10 @@ impl Config {
         for (i, in_cfg) in self.inbounds.into_iter().enumerate() {
             let tag = in_cfg.tag.unwrap_or_else(|| format!("inbound-{}", i));
             let proto = in_cfg.protocol.to_lowercase();
+            super::grpc_runtime::validate_role(&proto, in_cfg.stream_settings.as_ref(), true)?;
+            if super::grpc_runtime::selected(in_cfg.stream_settings.as_ref()) {
+                super::grpc_runtime::validate_protocol_options(&proto, in_cfg.settings.as_ref())?;
+            }
             let session_settings = in_cfg.settings.clone();
             if proto == "tun" {
                 let st = in_cfg.settings.as_ref();
@@ -822,7 +839,12 @@ impl Config {
                 other => return Err(Error::Unsupported(format!("Inbound protocol '{}' is not supported", other))),
             };
             let sniffing_req = parse_sniffing(in_cfg.sniffing.as_ref(), true);
-            let handler: Arc<dyn InboundHandler> = if matches!(proto.as_str(), "hysteria" | "wireguard") {
+            let handler: Arc<dyn InboundHandler> = if let Some(stream) = in_cfg.stream_settings.as_ref().filter(|stream| super::grpc_runtime::selected(Some(stream))) {
+                let handler = if let Some(sniff) = sniffing_req {
+                    Arc::new(crate::app::proxyman::inbound::StreamInboundHandler::new(handler, None, false, None, None).with_sniffing(sniff)) as Arc<dyn InboundHandler>
+                } else { handler };
+                runtime.grpc_inbound(handler, &proto, stream)?
+            } else if matches!(proto.as_str(), "hysteria" | "wireguard") {
                 if sniffing_req.is_some() { return Err(Error::Unsupported(format!("native {} inbound sniffing is not implemented", proto))); }
                 handler
             } else if let Some(ref stream_cfg) = in_cfg.stream_settings
