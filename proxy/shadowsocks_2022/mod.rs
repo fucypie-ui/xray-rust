@@ -46,3 +46,6 @@ mod extended_test;
 
 #[cfg(test)]
 mod go_peer_test;
+
+#[cfg(test)]
+mod relay_go_peer_test;
