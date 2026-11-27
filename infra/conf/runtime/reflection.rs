@@ -42,6 +42,8 @@ fn registered_services(enabled: &[String]) -> BTreeSet<String> {
 
 /// FindDescriptorByName includes members, nested declarations and extensions.
 fn symbol_file(name: &str) -> Option<FileDescriptor> {
+    // Go matches exact FullName values; prost-reflect accepts a leading dot.
+    if name.starts_with('.') { return None; }
     let pool = native::descriptors();
     if let Some(service) = pool.get_service_by_name(name) { return Some(service.parent_file()); }
     if let Some(message) = pool.get_message_by_name(name) { return Some(message.parent_file()); }

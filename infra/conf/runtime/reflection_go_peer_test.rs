@@ -419,8 +419,8 @@ impl Root {
                 match timeout_at(graceful_end, &mut *task).await {
                     Ok(joined) => {
                         let _ = slot.take(); // Await completed; safe to release.
-                        if let Err(error) = joined {
-                            if !error.is_cancelled() { errors.push(format!("root listener task panicked: {error}")); }
+                        if let Err(error) = joined && !error.is_cancelled() {
+                            errors.push(format!("root listener task panicked: {error}"));
                         }
                     }
                     Err(_) => {
@@ -438,8 +438,8 @@ impl Root {
                 match timeout_at(end, &mut *task).await {
                     Ok(joined) => {
                         let _ = slot.take();
-                        if let Err(error) = joined {
-                            if !error.is_cancelled() { errors.push(format!("aborted root task panicked: {error}")); }
+                        if let Err(error) = joined && !error.is_cancelled() {
+                            errors.push(format!("aborted root task panicked: {error}"));
                         }
                     }
                     Err(_) => errors.push("aborted root task did not join within the reserved group deadline".into()),

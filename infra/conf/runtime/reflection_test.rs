@@ -668,11 +668,15 @@ bounded_test!(configured_reflection_missing_queries_recover_on_same_stream, {
             for input in [
                 query(package, "file_by_filename", "missing.proto"), query(package, "file_by_filename", ""),
                 query(package, "file_containing_symbol", ".xray.common.protocol.User"),
+                query(package, "file_containing_symbol", ".xray.app.proxyman.command.HandlerService"),
+                query(package, "file_containing_symbol", ".xray.common.geodata.Domain.Type"),
+                query(package, "file_containing_symbol", ".pb.go"),
                 query(package, "file_containing_symbol", "missing.Symbol"),
                 extension_query(package, "google.protobuf.FeatureSet", -1),
                 extension_query(package, "google.protobuf.FeatureSet", 0),
                 extension_query(package, "missing.Symbol", 1002),
                 query(package, "all_extension_numbers_of_type", "missing.Symbol"),
+                query(package, "all_extension_numbers_of_type", ".xray.common.protocol.User"),
             ] {
                 rpc.request(&input).await;
                 let output = rpc.response(package).await; assert_echo(&output, &input); assert_missing(&output);
@@ -897,7 +901,7 @@ bounded_test!(configured_reflection_cancellation_preserves_dynamic_unary_stats, 
             canceled.send.send_reset(h2::Reason::CANCEL); drop(canceled);
             let mut active = fixture.open(package).await;
             active.request(&query(package, "list_services", "")).await;
-            assert_eq!(services(&active.response(package).await), &ALL_NAMES[..2]);
+            assert_eq!(services(&active.response(package).await), [ALL_NAMES[0], ALL_NAMES[1], ALL_NAMES[5], ALL_NAMES[9]]);
             counter.add(7);
             let input = native::decode_message("xray.app.stats.command.QueryStatsRequest", &[]).unwrap();
             let mut unary = fixture.open_path("/xray.app.stats.command.StatsService/QueryStats", None, false).await;
