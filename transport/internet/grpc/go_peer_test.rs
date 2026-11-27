@@ -14,7 +14,7 @@ const AUTHORITY: &str = "gun.reference.invalid:8443";
 const LIMIT: Duration = Duration::from_secs(40);
 fn payload(n: usize, salt: usize) -> Vec<u8> { (0..n).map(|i| (i * 73 + i / 251 + salt) as u8).collect() }
 fn binary() -> std::ffi::OsString {
-    assert!(cfg!(target_os = "linux"), "pinned Go gRPC tests require Linux");
+    assert_eq!(std::env::consts::OS, "linux", "pinned Go gRPC tests require Linux");
     std::env::var_os("XRAY_GRPC_GO_PEER").expect("mandatory selected gRPC test: set XRAY_GRPC_GO_PEER to the pinned Linux helper; helper absence is a failure")
 }
 
@@ -160,7 +160,7 @@ async fn grpc_go_reference_strict_control_rejects_invalid_json() {
         (valid.replace(r#""multi_mode":false"#, r#""multi_mode":"false""#), "cannot unmarshal"),
         (r#"{"mode":"server"}"#.into(), "missing JSON control field"),
         ("[]".into(), "expected JSON control object"),
-        ("{".into(), "EOF"),
+        ("{".into(), "unexpected end of JSON input"),
     ] {
         tokio::time::timeout(LIMIT, async {
             let mut child = Command::new(&executable).kill_on_drop(true)

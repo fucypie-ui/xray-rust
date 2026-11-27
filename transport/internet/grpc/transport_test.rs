@@ -69,7 +69,7 @@ fn grpc_pinned_paths_and_protobuf_golden_wire() {
     assert_eq!(multi.encode_to_vec(), b"\x0a\x01a\x0a\x00\x0a\x02bc");
     assert_eq!(decode_hunk(Bytes::from_static(b"\x0a\x01a\x10\x07\x0a\x01b"), false).unwrap(), vec![Bytes::from_static(b"b")]);
     assert!(decode_hunk(Bytes::from_static(b"\x0a\x05x"), false).is_err());
-    assert!(decode_hunk(Bytes::from(vec![10, 0].repeat(MAX_HUNKS + 1)), true).is_err());
+    assert!(decode_hunk(Bytes::from([10, 0].repeat(MAX_HUNKS + 1)), true).is_err());
     for flag in [1, 2, 255] {
         assert!(decode_grpc_frame(&[flag, 0, 0, 0, 0]).is_err());
     }
