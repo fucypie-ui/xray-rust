@@ -54,6 +54,10 @@ jobs:
             filter: proxy::shadowsocks_2022::relay_go_peer_test
             minimum: 2
             mode: --ignored
+          - engine: grpc
+            filter: transport::internet::grpc::go_peer_test
+            minimum: 3
+            mode: --ignored
     defaults:
       run:
         shell: bash
@@ -120,6 +124,11 @@ jobs:
               bash testing/ss2022-relay-reference/build-peer.sh "$GITHUB_WORKSPACE/go-reference" "$output_directory/ss2022-relay-go-peer"
               test -x "$output_directory/ss2022-relay-go-peer"
               printf 'XRAY_SS2022_RELAY_GO_PEER=%s/ss2022-relay-go-peer\n' "$output_directory" >> "$GITHUB_ENV"
+              ;;
+            grpc)
+              bash testing/grpc-reference/build-peer.sh "$GITHUB_WORKSPACE/go-reference" "$output_directory/grpc-go-peer"
+              test -x "$output_directory/grpc-go-peer"
+              printf 'XRAY_GRPC_GO_PEER=%s/grpc-go-peer\n' "$output_directory" >> "$GITHUB_ENV"
               ;;
             *) exit 2 ;;
           esac

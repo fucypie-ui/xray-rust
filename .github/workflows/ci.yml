@@ -69,6 +69,10 @@ jobs:
         timeout-minutes: 5
         run: python3 .github/scripts/run-required-rust-tests.py proxy::shadowsocks::runtime_test::classic_native_close_revokes_pending_accept_sockets 1
 
+      - name: Require HTTP2 Gun transport regression coverage
+        timeout-minutes: 5
+        run: python3 .github/scripts/run-required-rust-tests.py transport::internet::grpc::transport_test 16
+
       - name: Compare built key commands with pinned Go vectors
         timeout-minutes: 5
         run: python3 .github/scripts/check-key-cli-parity.py target/debug/xray testing/crypto-reference/vectors.json
